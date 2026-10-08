@@ -1,0 +1,19 @@
+# Example artifact manifest — olmOCR 2 FP8 (production visual checkpoint).
+# TEMPLATE: sha256 values and upstream_revision must be completed during
+# controlled staging (§3 steps 1–5) before this manifest is approved.
+artifact_manifest:
+  artifact_name: "allenai/olmOCR-2-7B-1025-FP8"
+  upstream_source: "https://huggingface.co/allenai/olmOCR-2-7B-1025-FP8"
+  upstream_revision: "<immutable-commit-hash>"
+  internal_location: "/models/allenai/olmOCR-2-7B-1025-FP8"
+  license: "Apache-2.0"
+  files:
+    - path: "config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "model.safetensors.index.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "tokenizer.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "preprocessor_config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  approval_record: "APPROVAL-2026-001"
