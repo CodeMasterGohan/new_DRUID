@@ -1,0 +1,17 @@
+# Example artifact manifest — MiniLM reranker (§10).
+# TEMPLATE: sha256 values and upstream_revision must be completed during
+# controlled staging (§3 steps 1–5) before this manifest is approved.
+artifact_manifest:
+  artifact_name: "cross-encoder/ms-marco-MiniLM-L6-v2"
+  upstream_source: "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2"
+  upstream_revision: "<immutable-commit-hash>"
+  internal_location: "/models/cross-encoder/ms-marco-MiniLM-L6-v2"
+  license: "Apache-2.0"
+  files:
+    - path: "config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "model.safetensors"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "tokenizer.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  approval_record: "APPROVAL-2026-003"
