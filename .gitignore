@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+pip-wheel-metadata/
+
+# Env / secrets — never commit real values
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+build/
+dist/
+*.whl
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Models and data — staged via artifact manifests, never committed
+/models/
+*.bin
+*.safetensors
+*.onnx
+
+# Uploads / derived artifacts (live in MinIO, not git)
+uploads/
+renders/
+
+# Eval corpus documents (licensed corpora stay out of git)
+eval/documents/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
