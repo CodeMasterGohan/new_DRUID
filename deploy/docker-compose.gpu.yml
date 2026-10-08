@@ -1,0 +1,47 @@
+# new_DRUID GPU plane — vLLM serving olmOCR-2-7B-FP8.
+# Runs ONLY on the H200 host. This is the single GPU consumer per spec §2.
+# See vllm-olmocr.md for the full config rationale.
+name: druid-gpu
+
+services:
+  vllm-olmocr:
+    # TODO: verify tag at deploy time; must support FP8 on Hopper (sm_90a).
+    image: vllm/vllm-openai:v0.7.3
+    environment:
+      HF_HUB_OFFLINE: 1
+      TRANSFORMERS_OFFLINE: 1
+    volumes:
+      # Host artifact registry, READ-ONLY. The FP8 checkpoint must already be
+      # staged at $MODEL_DIR/allenai/olmOCR-2-7B-1025-FP8 (see artifact manifest).
+      - ${MODEL_DIR:-/models}:/models:ro
+    ports:
+      - "${VLLM_PORT:-8000}:8000"
+    command:
+      - --model
+      - /models/allenai/olmOCR-2-7B-1025-FP8
+      - --served-model-name
+      - olmocr-2-fp8
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --gpu-memory-utilization
+      - ${VLLM_GPU_MEMORY_UTILIZATION:-0.7}
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-8192}
+      - --limit-mm-per-prompt
+      - image=4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
