@@ -1,0 +1,28 @@
+[project]
+name = "new-druid-mcp-server"
+version = "0.1.0"
+description = "MCP server for the new_DRUID enterprise local-first RAG system"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp==1.12.0",
+    "pydantic==2.11.7",
+    "PyJWT==2.10.1",
+    "httpx==0.28.1",
+    "uvicorn==0.34.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.5",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
