@@ -1,0 +1,23 @@
+# Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+# NOTE: also copies ../catalog + ../common as a services tree — see Dockerfile.
+# sqlalchemy-family pins match the catalog service's install-verified versions.
+pdftext==0.4.2
+pypdfium2==4.30.1
+pillow==11.1.0
+rq==2.0.0
+redis==5.2.1
+minio==7.2.13
+sqlalchemy==2.0.38
+psycopg[binary]==3.2.9
+httpx==0.28.1
+pydantic==2.11.7
+pydantic-settings==2.7.1
+structlog==25.1.0
+# EmbeddingGemma 2 backend (CPU, sentence-transformers) + MiniLM tokenizer.
+# Model WEIGHTS are never downloaded: backends fail closed unless the
+# pre-staged artifact paths (EMBEDDING_MODEL_PATH, MINILM_TOKENIZER_PATH)
+# exist. Regenerate pins with pip-compile before release.
+sentence-transformers==3.3.1
+# olmOCR toolkit: prompt builders only (never hand-rolled prompts, §5).
+# The vLLM server does inference; this client only builds prompts.
+olmocr==0.4.0
