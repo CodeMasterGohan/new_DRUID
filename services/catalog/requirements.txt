@@ -1,0 +1,8 @@
+# Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+# Verified installable + test-passing 2026-10-08 (catalog + gateway suites).
+sqlalchemy==2.0.38
+alembic==1.15.2
+psycopg[binary]==3.2.9
+pydantic==2.11.7
+structlog==25.1.0
+pytest==8.3.5
