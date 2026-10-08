@@ -1,0 +1,14 @@
+# Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+# CPU-only torch: install torch from the CPU index FIRST, e.g.
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
+# then install this file. (GPU torch must never land here — see §2 arbitration.)
+sentence-transformers==3.4.1
+torch==2.6.0
+transformers==4.48.3
+huggingface-hub==0.27.1
+pillow==11.1.0
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+pydantic==2.11.7
+pydantic-settings==2.7.1
+structlog==25.1.0

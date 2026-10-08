@@ -1,0 +1,12 @@
+# Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+# Verified installable + test-passing 2026-10-08 (catalog + gateway suites).
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+pydantic==2.11.7
+pydantic-settings==2.7.1
+pyjwt==2.10.1
+cryptography==44.0.2
+httpx==0.28.1
+redis==5.2.1
+structlog==25.1.0
+pytest==8.3.5
