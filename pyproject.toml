@@ -1,0 +1,19 @@
+# Root tooling config only — dependencies live in each service's
+# requirements.txt (pinned). Python 3.11+ everywhere.
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["services"]
+python_files = ["test_*.py"]
