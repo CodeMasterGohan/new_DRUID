@@ -1,0 +1,20 @@
+# Example artifact manifest — EmbeddingGemma 2 (embedding model, §8).
+# Text+image configuration (440M effective); audio encoder disabled.
+# TEMPLATE: sha256 values and upstream_revision must be completed during
+# controlled staging (§3 steps 1–5) before this manifest is approved.
+artifact_manifest:
+  artifact_name: "google/embeddinggemma-2"
+  upstream_source: "https://huggingface.co/google/embeddinggemma-2"
+  upstream_revision: "<immutable-commit-hash>"
+  internal_location: "/models/google/embeddinggemma-2"
+  license: "Apache-2.0"
+  files:
+    - path: "config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "model.safetensors"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "tokenizer.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "tokenizer_config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  approval_record: "APPROVAL-2026-002"
