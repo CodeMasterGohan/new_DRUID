@@ -1,0 +1,5 @@
+# Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+pyyaml==6.0.2
+structlog==25.1.0
+# test dependency
+pytest==8.3.4
