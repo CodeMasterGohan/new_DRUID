@@ -1,0 +1,14 @@
+# Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+# NOTE: also copies ../catalog + ../common as a services tree — see Dockerfile.
+# sqlalchemy/psycopg match the catalog service's install-verified pins.
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+pymilvus==2.5.6
+sqlalchemy==2.0.38
+psycopg[binary]==3.2.9
+httpx==0.28.1
+redis==5.2.1
+pydantic==2.11.7
+pydantic-settings==2.7.1
+structlog==25.1.0
+pytest==8.3.5
