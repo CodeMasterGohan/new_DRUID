@@ -9,7 +9,7 @@ A single H200 is a single point of failure. Backups are load-bearing, and
 |---|---|---|
 | Milvus | `milvus-backup` | `project_knowledge_base_v*` collections + aliases |
 | PostgreSQL | `pg_basebackup` + WAL archiving (or nightly `pg_dump`) | Full catalog: tenants, documents, versions, jobs, review quarantine |
-| MinIO | `mc mirror` to a second MinIO / filesystem target | Originals, page renders, parsed trees, markdown, provenance |
+| RustFS | `rclone sync` to an S3 remote (RustFS ships no bundled mc) | Originals, page renders, parsed trees, markdown, provenance |
 
 Backup the **catalog and Milvus together** (same window): the catalog's
 active-version pointers must be consistent with the indexed collections.
@@ -21,13 +21,14 @@ should not rely on that.
 
 - Milvus: nightly `milvus-backup create`, retain 7 days.
 - PostgreSQL: continuous WAL archiving + weekly base backup, retain 4 weeks.
-- MinIO: continuous `mc mirror --watch`, plus nightly snapshot, retain 30 days.
+- RustFS: continuous `rclone sync` to an S3 remote (via `rclone sync --watch`-style
+  polling or a cron-triggered run), plus nightly snapshot, retain 30 days.
 
 ## Restore procedure
 
-1. Stop all services except the infrastructure (`postgres`, `minio`, `milvus`).
+1. Stop all services except the infrastructure (`postgres`, `rustfs`, `milvus`).
 2. Restore PostgreSQL from base backup + WAL to the backup timestamp T.
-3. Restore MinIO objects to T.
+3. Restore RustFS objects to T.
 4. Restore Milvus collections with `milvus-backup restore` to T.
 5. Run `milvus_setup` in **verify mode** (must confirm, not recreate) that the
    alias `project_knowledge_base` resolves and collection schema matches §9.
@@ -47,7 +48,7 @@ should not rely on that.
 
 ## RTO / RPO targets (initial, tune after first drill)
 
-- RPO: ≤ 24 h (nightly Milvus/PG backups; MinIO continuous).
+- RPO: ≤ 24 h (nightly Milvus/PG backups; RustFS continuous).
 - RTO: ≤ 4 h for full restore on equivalent hardware.
 
 ## Deletion interplay (§12)

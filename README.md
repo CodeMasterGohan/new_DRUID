@@ -22,7 +22,7 @@ clients (Web UI / AI agent / CLI)
   → Ingestion Workers (pdftext native path → page router → olmOCR 2 FP8 →
      canonical document tree → structural chunking → EmbeddingGemma 2 on CPU)
   → Milvus (dense 768-dim + BM25 hybrid, group_id partition key)
-  → Object Storage (MinIO, tenant-scoped: originals / renders / trees)
+  → Object Storage (RustFS, S3-compatible, tenant-scoped: originals / renders / trees)
 GPU: vLLM serves olmOCR-2-7B-FP8 — the ONLY GPU consumer (--gpu-memory-utilization 0.7)
 ```
 
@@ -52,7 +52,7 @@ services/
   milvus_setup/   One-shot collection/index creation job (pymilvus)
   artifacts/      Artifact manifest tooling (validate / verify / allowlist)
 deploy/
-  docker-compose.yml        Postgres, Redis, MinIO, Milvus standalone
+  docker-compose.yml        Postgres, Redis, RustFS, Milvus standalone
   docker-compose.gpu.yml    vLLM olmOCR-2-7B-FP8 on the H200
   vllm-olmocr.md            vLLM config + GPU arbitration notes
 docs/

@@ -31,18 +31,25 @@ services:
       retries: 10
     restart: unless-stopped
 
-  minio:
-    # TODO: pin to a dated RELEASE tag at deploy time (e.g. RELEASE.2025-XX-XXTXX-XX-XXZ)
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  rustfs:
+    # Replaces MinIO (community edition archived 2026). RustFS runs as
+    # non-root UID 10001; the named volume is owned on first start.
+    image: rustfs/rustfs:1.0.1
+    command: ["--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
     volumes:
-      - miniodata:/data
+      - rustfsdata:/data
     ports:
       - "9000:9000"
       - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   etcd:
@@ -62,10 +69,10 @@ services:
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: etcd:2379
-      # Milvus shares OUR MinIO (separate bucket) instead of running its own.
-      MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      # Milvus shares OUR RustFS (separate bucket) instead of running its own.
+      MINIO_ADDRESS: rustfs:9000
+      MINIO_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY}
+      MINIO_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
       MINIO_USE_SSL: "false"
     volumes:
       - milvusdata:/var/lib/milvus
@@ -74,7 +81,7 @@ services:
       - "9091:9091"
     depends_on:
       - etcd
-      - minio
+      - rustfs
     restart: unless-stopped
 
   # ── one-shot jobs ──────────────────────────────────────────────
@@ -108,7 +115,7 @@ services:
     env_file:
       - ../.env
     ports:
-      - "${GATEWAY_PORT:-8000}:8000"
+      - "${GATEWAY_PORT:-8080}:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -135,15 +142,11 @@ services:
       dockerfile: services/mcp_server/Dockerfile
     env_file:
       - ../.env
-    environment:
-      # TODO: remove once real Retrieval/Ingestion/Catalog HTTP clients land
-      # (sibling scope). Without this, create_app() refuses to build and the
-      # service crash-loops. Dev/fake clients only — never real tenant data.
-      DRUID_MCP_DEV_FAKE_CLIENTS: "1"
     ports:
       - "${MCP_PORT:-8002}:8002"
     depends_on:
       - document_api
+      - retrieval
     restart: unless-stopped
 
 
@@ -215,7 +218,7 @@ services:
 volumes:
   pgdata:
   redisdata:
-  miniodata:
+  rustfsdata:
   etcddata:
   milvusdata:
 

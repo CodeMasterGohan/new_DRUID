@@ -17,7 +17,7 @@ vLLM run on CPU/host RAM. vLLM (olmOCR-2-7B-FP8) is the ONLY GPU consumer
 
 ## 1. Host sizing (spec §9 — record the math, don't assume it)
 
-The H200's 141 GB is **GPU memory**. Milvus, PostgreSQL, MinIO, and the vLLM
+The H200's 141 GB is **GPU memory**. Milvus, PostgreSQL, RustFS, and the vLLM
 host-side footprint all live in **host RAM**. Size host RAM and disk from the
 target corpus:
 
@@ -43,7 +43,7 @@ All-in planning figure: **~8 KB per text chunk**, **~4 KB per page-image record*
 | Milvus row overhead/text | 5.2M × 3 KB | ~15 GB |
 | **Milvus total** | | **~43 GB** |
 | PostgreSQL (catalog: docs, versions, jobs) | metadata only | ~5 GB |
-| MinIO (originals + renders + trees + markdown) | corpus-dependent, disk-bound | size from corpus × 2 headroom |
+| RustFS (originals + renders + trees + markdown) | corpus-dependent, disk-bound | size from corpus × 2 headroom |
 | vLLM host-side (tokenizer, misc) | | ~4 GB |
 | OS page cache + headroom | | ~16 GB |
 | **Host RAM target** | | **≥ 96 GB (128 GB comfortable)** |
@@ -68,7 +68,7 @@ cp .env.example .env   # fill secrets
 docker network create druid-net
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d postgres redis minio etcd milvus
+docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
 
 # 2. Schema + migrations (one-shot jobs, must exit 0)
 docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head

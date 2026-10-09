@@ -78,7 +78,7 @@ object keys are tenant-scoped
 <h3 id="post-v1documentsupload-201"><code>POST /v1/documents/upload</code> → 201</h3>
 <p>Multipart upload. Server-side: magic-byte MIME sniff, size cap streamed
 at 1 MiB, PDF trailer page count, sha256, opaque UUIDs, tenant-scoped
-MinIO key, commit-before-enqueue, enqueue failure parks the job as
+RustFS key, commit-before-enqueue, enqueue failure parks the job as
 <code>FAILED</code>.</p>
 <p>Response <code>UploadResponse</code>:</p>
 <pre><code class="language-json">{
