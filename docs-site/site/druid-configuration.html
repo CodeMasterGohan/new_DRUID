@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration reference &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a class="active" aria-current="page" href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-configuration-reference">new_DRUID — Configuration Reference</h1>
+<p>Every variable below is present in <code>build/.env.example</code>. Copy it to
+<code>.env</code> and fill in secrets — <strong>never commit a filled <code>.env</code></strong>. Service
+names follow the shared template without a <code>DRUID_</code> prefix (a deliberate
+convention, aligned across gateway, MCP server, and siblings).</p>
+<h2 id="postgresql-catalog">PostgreSQL (catalog)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POSTGRES_USER</code></td>
+<td><code>druid</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>POSTGRES_PASSWORD</code></td>
+<td><code>change-me</code></td>
+<td><strong>Secret</strong></td>
+</tr>
+<tr>
+<td><code>POSTGRES_DB</code></td>
+<td><code>druid_catalog</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td><code>postgresql+psycopg://druid:change-me@postgres:5432/druid_catalog</code></td>
+<td><code>alembic/env.py</code> requires this and refuses to guess</td>
+</tr>
+</tbody>
+</table>
+<p>Image: <code>postgres:16.6-alpine</code>.</p>
+<h2 id="redis-queue-broker-cache">Redis (queue broker + cache)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>REDIS_URL</code></td>
+<td><code>redis://redis:6379/0</code></td>
+<td>Job queue broker; quota counters; gateway uses it for quotas when set, in-memory otherwise</td>
+</tr>
+</tbody>
+</table>
+<p>Image: <code>redis:7.4.2-alpine</code> with <code>--appendonly yes</code>.</p>
+<h2 id="minio-tenant-scoped-object-storage">MinIO (tenant-scoped object storage)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MINIO_ROOT_USER</code></td>
+<td><code>druid</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MINIO_ROOT_PASSWORD</code></td>
+<td><code>change-me-min-8-chars</code></td>
+<td><strong>Secret</strong> (min 8 chars)</td>
+</tr>
+<tr>
+<td><code>MINIO_ENDPOINT</code></td>
+<td><code>minio:9000</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MINIO_BUCKET</code></td>
+<td><code>druid-artifacts</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Milvus shares this MinIO (separate bucket) instead of running its own.
+Image tag is <code>minio/minio:latest</code> — pin a dated RELEASE tag at deploy
+(see <a href="druid-troubleshooting.html">Troubleshooting</a>).</p>
+<h2 id="milvus">Milvus</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MILVUS_URI</code></td>
+<td><code>http://milvus:19530</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MILVUS_COLLECTION</code></td>
+<td><code>project_knowledge_base_v1</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MILVUS_ALIAS</code></td>
+<td><code>project_knowledge_base</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Image: <code>milvusdb/milvus:v2.5.6</code> (standalone) + <code>quay.io/coreos/etcd:v3.5.16</code>.</p>
+<h2 id="auth-gateway">Auth (gateway)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JWT_ISSUER</code></td>
+<td><code>https://auth.internal.example</code></td>
+<td>Expected <code>iss</code>; MCP server default is <code>druid-gateway</code></td>
+</tr>
+<tr>
+<td><code>JWT_AUDIENCE</code></td>
+<td><code>druid-api</code></td>
+<td>Expected <code>aud</code>; MCP server default is <code>druid-mcp</code></td>
+</tr>
+<tr>
+<td><code>JWKS_URL</code></td>
+<td><code>https://auth.internal.example/.well-known/jwks.json</code></td>
+<td>For RS256/ES256 token verification</td>
+</tr>
+</tbody>
+</table>
+<p>New_DRUID has <strong>no credential store</strong>; tokens are provisioned out-of-band
+by the operator (see <a href="druid-web-ui.html">Web UI</a>).</p>
+<h2 id="quotas-4">Quotas (§4)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>QUOTA_INGEST_PAGES_PER_DAY</code></td>
+<td><code>1000</code></td>
+<td>Per-tenant daily page budget; estimates until burn-in</td>
+</tr>
+<tr>
+<td><code>QUOTA_QUERY_QPS</code></td>
+<td><code>10</code></td>
+<td>Per-tenant sliding-window QPS</td>
+</tr>
+<tr>
+<td><code>MAX_UPLOAD_MB</code></td>
+<td><code>200</code></td>
+<td>Gateway returns 413 over cap</td>
+</tr>
+<tr>
+<td><code>MAX_PAGES_PER_DOCUMENT</code></td>
+<td><code>2000</code></td>
+<td>400 over cap</td>
+</tr>
+</tbody>
+</table>
+<h2 id="model-artifacts-mounted-read-only-from-host-registry">Model artifacts (mounted read-only from host registry)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MODEL_DIR</code></td>
+<td><code>/models</code></td>
+<td>Host artifact registry; mounted <code>:ro</code> into embedding, retrieval, ingestion, vLLM</td>
+</tr>
+<tr>
+<td><code>OLMOCR_MODEL_DIR</code></td>
+<td><code>/models/allenai/olmOCR-2-7B-1025-FP8</code></td>
+<td>FP8 production checkpoint</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_MODEL_DIR</code></td>
+<td><code>/models/google/embeddinggemma-2</code></td>
+<td>Fallback alias; see next row</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_MODEL_PATH</code></td>
+<td><code>/models/google/embeddinggemma-2</code></td>
+<td><strong>Primary</strong> name the embedding service reads</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_MODALITY_CONFIG</code></td>
+<td><code>text+image</code></td>
+<td><code>text+image</code> | <code>text-only</code></td>
+</tr>
+<tr>
+<td><code>EMBEDDING_DIMENSION</code></td>
+<td><code>768</code></td>
+<td>Validated Matryoshka widths: 768/512/256/128</td>
+</tr>
+<tr>
+<td><code>EMBEDDING_BACKEND</code></td>
+<td><code>st</code></td>
+<td><code>st</code> (sentence-transformers) | <code>mock</code></td>
+</tr>
+<tr>
+<td><code>RERANKER_MODEL_DIR</code></td>
+<td><code>/models/cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
+<td>MiniLM reranker</td>
+</tr>
+<tr>
+<td><code>MINILM_TOKENIZER_PATH</code></td>
+<td><code>/models/cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
+<td>Tokenizer the ingestion chunker enforces its token budget with (fail-closed); separate var because the chunker needs only the tokenizer</td>
+</tr>
+<tr>
+<td><code>HF_HUB_OFFLINE</code></td>
+<td><code>1</code></td>
+<td>Baked into images; never download at runtime</td>
+</tr>
+<tr>
+<td><code>TRANSFORMERS_OFFLINE</code></td>
+<td><code>1</code></td>
+<td>Baked into images</td>
+</tr>
+</tbody>
+</table>
+<h2 id="vllm-olmocr-2-gpu-arbitration">vLLM / olmOCR (§2 GPU arbitration)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OLMOCR_VLLM_URL</code></td>
+<td><code>http://vllm-olmocr:8000</code></td>
+<td>Base URL of the vLLM OpenAI-compatible endpoint; read by ingestion workers; resolves via shared <code>druid-net</code></td>
+</tr>
+<tr>
+<td><code>VLLM_PORT</code></td>
+<td><code>8000</code></td>
+<td>Host-side port of the vLLM endpoint</td>
+</tr>
+<tr>
+<td><code>VLLM_GPU_MEMORY_UTILIZATION</code></td>
+<td><code>0.7</code></td>
+<td>Initial cap; tune against KV-cache pressure</td>
+</tr>
+<tr>
+<td><code>VLLM_MAX_MODEL_LEN</code></td>
+<td><code>8192</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="service-ports">Service ports</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GATEWAY_PORT</code></td>
+<td><code>8080</code></td>
+<td>Host mapping; container listens on 8000. <strong>Must not collide with <code>VLLM_PORT</code></strong> — both compose projects run on the same host</td>
+</tr>
+<tr>
+<td><code>DOCUMENT_API_PORT</code></td>
+<td><code>8001</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MCP_PORT</code></td>
+<td><code>8002</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>EMBEDDING_PORT</code></td>
+<td><code>8003</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>RETRIEVAL_PORT</code></td>
+<td><code>8004</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>WEB_UI_PORT</code></td>
+<td><code>8005</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Container-internal ports are the un-prefixed values; only the host-side
+mapping moves (documented in the template).</p>
+<h2 id="service-urls-compose-dns-service-names-use-underscores">Service URLs (compose DNS — service names use underscores)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DOCUMENT_API_URL</code></td>
+<td><code>http://document_api:8001</code></td>
+<td>Gateway upstream</td>
+</tr>
+<tr>
+<td><code>MCP_SERVER_URL</code></td>
+<td><code>http://mcp_server:8002</code></td>
+<td>Gateway upstream</td>
+</tr>
+<tr>
+<td><code>GATEWAY_URL</code></td>
+<td><code>http://gateway:8000</code></td>
+<td>Container-internal DNS (web_ui hardcodes this in compose; env default here)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="internal-identity-propagation-gateway-backend-services">Internal identity propagation (gateway → backend services)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>INTERNAL_SECRET</code></td>
+<td><code>&lt;redacted&gt;</code> (template ships empty; gateway's own default is <code>change-me-in-production</code>)</td>
+<td>HMAC secret the gateway uses to sign <code>X-Druid-*</code> identity headers. <strong>Secret. Never commit a filled value.</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="mcp-server-streamable-http-authenticated">MCP server (Streamable HTTP, authenticated)</h2>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JWT_SECRET</code></td>
+<td><code>change-me</code></td>
+<td>HS256 shared secret for bearer-token verification. <strong>One of <code>JWT_SECRET</code> or <code>JWT_PUBLIC_KEY_PEM</code> is required. Secret.</strong></td>
+</tr>
+<tr>
+<td><code>JWT_PUBLIC_KEY_PEM</code></td>
+<td>(unset)</td>
+<td>RS256 public key alternative</td>
+</tr>
+<tr>
+<td><code>MCP_ALLOWED_ORIGINS</code></td>
+<td>(empty)</td>
+<td>Comma-separated origins allowed to present an <code>Origin</code> header (DNS-rebinding protection). Requests without <code>Origin</code> (native clients) are allowed; with a non-allowlisted <code>Origin</code> → 403</td>
+</tr>
+</tbody>
+</table>
+<p>Also read by the MCP server: the shared <code>JWT_ISSUER</code> / <code>JWT_AUDIENCE</code>
+names (not <code>DRUID_</code>-prefixed), and <code>DRUID_MCP_DEV_FAKE_CLIENTS=1</code>
+(dev/fake clients — compose-only, never real tenant data).</p>
+<h2 id="notes">Notes</h2>
+<ul>
+<li><code>COOKIE_SECURE</code> (default <code>true</code>) exists in the web_ui README config
+  table — set <code>false</code> for plain-HTTP local dev.</li>
+<li>The web_ui uploads through the gateway, so <code>MAX_UPLOAD_MB</code> applies
+  there too; the UI uses its own <code>max_upload_mb</code> (200) and
+  <code>upload_chunk_mb</code> (8) settings.</li>
+<li>All <code>${VAR}</code> references in the compose files have a template entry or
+  a default (verified by <code>tests/test_deploy_wiring.py</code>).</li>
+</ul>
+</main>
+</body>
+</html>

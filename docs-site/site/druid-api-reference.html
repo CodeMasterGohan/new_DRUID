@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document &amp; Admin API reference &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a class="active" aria-current="page" href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-api-reference-document-admin">new_DRUID — API Reference (Document &amp; Admin)</h1>
+<p>All document/admin API calls go through the <strong>gateway</strong>, which
+authenticates the caller and forwards with HMAC-signed identity headers.
+The routes below are copied from <code>services/document_api/routes/</code>
+(<code>documents.py</code>, <code>review.py</code>, <code>admin.py</code>); nothing else is documented
+here.</p>
+<h2 id="auth-model">Auth model</h2>
+<ol>
+<li><strong>Client → gateway.</strong> Every request carries
+   <code>Authorization: Bearer &lt;JWT&gt;</code>. The gateway validates signature,
+   issuer, audience, and expiry (HS256 shared secret or RS256 via JWKS).
+   The trusted context (<code>user_id</code>, <code>group_id</code>, <code>roles</code>, <code>request_id</code>) is
+   built from token claims <strong>only</strong>; <code>group_id</code> is required, never
+   inferred from headers.</li>
+<li><strong>Gateway → document_api.</strong> The gateway strips spoofable headers and
+   signs the identity into <code>X-Druid-*</code> headers: <code>X-Druid-User</code>,
+   <code>X-Druid-Group</code>, <code>X-Druid-Roles</code>, <code>X-Druid-Request-Id</code>, plus
+   <code>X-Druid-Internal-Sig</code>. The signature is HMAC-SHA256 over
+   <code>druid-v1|user|group|roles_sorted_csv|request_id</code>, formatted as
+   <code>v1:&lt;hex&gt;</code>, keyed by <code>INTERNAL_SECRET</code>. document_api verifies the
+   signature byte-exactly and <strong>fails closed</strong> on missing headers, bad
+   signature, or an unconfigured secret.</li>
+</ol>
+<h2 id="tenant-scoping">Tenant scoping</h2>
+<p>The <code>group_id</code> claim is resolved to a tenant row; every repository query
+is filtered to that tenant. Cross-tenant IDs are indistinguishable from
+missing ones: the API returns <strong>404</strong>, never a permission hint.
+Filenames are display metadata only and never become storage paths;
+object keys are tenant-scoped
+(<code>{group_id}/{document_id}/{version_id}/...</code>).</p>
+<h2 id="document-routes">Document routes</h2>
+<h3 id="post-v1documentsupload-201"><code>POST /v1/documents/upload</code> → 201</h3>
+<p>Multipart upload. Server-side: magic-byte MIME sniff, size cap streamed
+at 1 MiB, PDF trailer page count, sha256, opaque UUIDs, tenant-scoped
+MinIO key, commit-before-enqueue, enqueue failure parks the job as
+<code>FAILED</code>.</p>
+<p>Response <code>UploadResponse</code>:</p>
+<pre><code class="language-json">{
+  &quot;document_id&quot;: &quot;…&quot;,
+  &quot;job_id&quot;: &quot;…&quot;,
+  &quot;status&quot;: &quot;UPLOADED&quot;,
+  &quot;page_count&quot;: 42,
+  &quot;checksum_sha256&quot;: &quot;…&quot;,
+  &quot;display_name&quot;: &quot;contract.pdf&quot;
+}
+</code></pre>
+<p>Limits: <code>MAX_UPLOAD_MB</code> (default 200) → <strong>413</strong>; <code>MAX_PAGES_PER_DOCUMENT</code>
+(default 2000) → <strong>400</strong>. Allowed MIME types: <code>application/pdf</code>,
+<code>image/png</code>, <code>image/jpeg</code>, <code>image/tiff</code>.</p>
+<h3 id="get-v1documents"><code>GET /v1/documents</code></h3>
+<p>Tenant-scoped list. Query params:</p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>review_required</code></td>
+<td><code>true</code> filters to documents awaiting reviewer attention (quarantine surface)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="get-v1documentsdocument_id"><code>GET /v1/documents/{document_id}</code></h3>
+<p>Metadata + versions + presigned artifact URLs for one document.</p>
+<h3 id="delete-v1documentsdocument_id-202"><code>DELETE /v1/documents/{document_id}</code> → 202</h3>
+<p>Authorizes in the catalog, then enqueues complete deletion (Milvus
+chunks, originals, derived artifacts, renders, caches, catalog
+visibility). <strong>Idempotent:</strong> retried DELETEs report the already-queued
+job instead of duplicating work. The job is not <code>DELETED</code> until every
+store confirms.</p>
+<p>Response <code>DeleteResponse</code>: <code>{document_id, job_id, status}</code>.</p>
+<h3 id="get-v1documentsdocument_idstatus"><code>GET /v1/documents/{document_id}/status</code></h3>
+<p>Job status for the document's <strong>active version</strong> ingestion job:
+<code>{job_id, job_type, state, document_id, document_version_id}</code>.</p>
+<h2 id="review-routes">Review routes</h2>
+<h3 id="get-v1reviewitems"><code>GET /v1/review/items</code></h3>
+<p>List quarantine items for the tenant. Query params:</p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td><code>pending</code></td>
+<td>One of <code>pending</code>, <code>accepted</code>, <code>re-routed</code>, <code>rejected</code>; anything else → <strong>400</strong></td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>100</td>
+<td>1–500</td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td>0</td>
+<td>≥ 0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="get-v1reviewitemsitem_id"><code>GET /v1/review/items/{item_id}</code></h3>
+<p>Returns the quarantine item: page render (presigned URL +
+<code>page_render_key</code>), both parse attempts, routing diagnostics, and any
+reviewer decision. 404 unless owned by the tenant.</p>
+<h3 id="post-v1reviewitemsitem_idresolve"><code>POST /v1/review/items/{item_id}/resolve</code></h3>
+<p>Applies <strong>accept / re-route / reject</strong>. Body: <code>{decision, detail?}</code>.
+Requires the <strong>reviewer</strong> role — anything else → <strong>403</strong>. Re-resolving
+an already-resolved item → <strong>409</strong>.</p>
+<h2 id="admin-routes-admin-role-required">Admin routes (admin role required)</h2>
+<p>All three require the <code>admin</code> role in the caller's JWT claims
+(non-admin → <strong>403</strong>, unauthenticated → <strong>401</strong>). The tenant filter is
+an explicit <code>tenant</code> query param (the tenant name = <code>group_id</code> claim),
+never a header. These are reachable via the gateway's <code>/v1/{path}</code> proxy.</p>
+<h3 id="get-v1admindocuments"><code>GET /v1/admin/documents</code></h3>
+<p>Query params: <code>tenant</code> (filter), <code>status</code> (filter on the document's
+<strong>latest</strong> version ingestion state, e.g. <code>UPLOADED</code>, <code>READY</code>; invalid
+values → <strong>400</strong>), <code>limit</code>, <code>offset</code>. Rows carry <code>document_id</code>,
+<code>display_name</code>, <code>group_id</code>, latest-version <code>status</code>, <code>updated_at</code>.</p>
+<h3 id="get-v1adminjobs"><code>GET /v1/admin/jobs</code></h3>
+<p>Query params: <code>tenant</code> (filter), <code>limit</code>, <code>offset</code>. Rows carry <code>job_id</code>,
+<code>group_id</code>, <code>job_type</code>, <code>state</code>, <code>attempt_count</code>, <code>error</code> (excerpt,
+truncated to 500 chars), <code>document_id</code>, <code>created_at</code>, <code>updated_at</code>,
+computed <code>duration_seconds</code> (<code>updated_at − created_at</code>). No <code>progress</code>
+field exists — the <code>jobs</code> table has no progress column; <code>state</code> +
+<code>attempt_count</code> are the progress signal.</p>
+<h3 id="get-v1adminquotas"><code>GET /v1/admin/quotas</code></h3>
+<p>Per-tenant <code>{group_id, ingest_pages_used, ingest_pages_limit,
+query_qps, query_qps_limit}</code>. Usage reads the gateway's Redis counters
+(<code>druid:quota:ingest:{tenant}:{date}</code>, <code>druid:quota:query:{tenant}</code>);
+limits mirror the gateway's <code>QUOTA_INGEST_PAGES_PER_DAY</code> /
+<code>QUOTA_QUERY_QPS</code> env vars. Redis unreachable → usage is <strong>null</strong>, not
+zero.</p>
+<h2 id="error-codes">Error codes</h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td>Invalid parameter (<code>status</code> value, <code>page_count</code>, filename, MIME mismatch, empty file)</td>
+<td>document_api</td>
+</tr>
+<tr>
+<td>401</td>
+<td>Missing/malformed Bearer token, invalid JWT (signature, issuer, audience, expiry), missing <code>group_id</code> claim; or bad gateway HMAC signature on internal hops</td>
+<td>gateway, document_api</td>
+</tr>
+<tr>
+<td>403</td>
+<td>Authenticated but lacking the required role (reviewer for review resolve, admin for <code>/v1/admin/*</code>); spoofed/missing internal identity</td>
+<td>gateway, document_api</td>
+</tr>
+<tr>
+<td>404</td>
+<td>Unknown, foreign, or cross-tenant document/job/item (cross-tenant is 404, not 403)</td>
+<td>document_api</td>
+</tr>
+<tr>
+<td>409</td>
+<td>Conflict: job already queued with the same idempotency key; quarantine item already resolved</td>
+<td>document_api</td>
+</tr>
+<tr>
+<td>413</td>
+<td>Upload exceeds <code>MAX_UPLOAD_MB</code></td>
+<td>gateway</td>
+</tr>
+<tr>
+<td>422</td>
+<td>Pydantic validation of MCP tool arguments (tool contracts)</td>
+<td>mcp_server</td>
+</tr>
+<tr>
+<td>429</td>
+<td>Quota exhausted, with <code>Retry-After</code> (rounded up, min 1s)</td>
+<td>gateway</td>
+</tr>
+<tr>
+<td>500</td>
+<td>Unhandled error (logged with <code>log.exception</code>)</td>
+<td>all services</td>
+</tr>
+<tr>
+<td>502 / 504</td>
+<td>Upstream transport error / timeout from the gateway proxy</td>
+<td>gateway</td>
+</tr>
+</tbody>
+</table>
+<p>Error handlers never leak detail on 401/403/404.</p>
+<h2 id="mcp-server-endpoint">MCP server endpoint</h2>
+<p>The MCP API is separate from the REST routes above: Streamable HTTP at
+<code>/mcp</code> on port 8002, bearer-JWT authenticated. See the <a href="druid-mcp-tools.html">MCP tools
+reference</a> for all 8 tools.</p>
+</main>
+</body>
+</html>
