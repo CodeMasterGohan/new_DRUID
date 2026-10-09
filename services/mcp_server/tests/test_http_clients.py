@@ -6,7 +6,6 @@ network, no real backends. The tests assert:
 * request shapes (paths, query params, JSON bodies, signed identity headers),
 * response mapping onto the ABC value objects,
 * error mapping (404 -> NotFoundError, everything else -> ServiceClientError),
-* the documented ingestion gaps (NotImplementedError),
 * ``create_app`` wiring: real clients by default, fakes behind the flag.
 """
 
@@ -575,14 +574,79 @@ class TestHttpCatalogDelete:
 
 
 # ---------------------------------------------------------------------------
-# ingestion gaps
+# ingestion: register_upload + get_job_status
 # ---------------------------------------------------------------------------
 
 
-class TestHttpIngestionGaps:
-    async def test_register_upload_has_no_backing_endpoint(self):
-        client = HttpIngestionClient(DOCUMENT_API_URL, SECRET)
-        with pytest.raises(NotImplementedError, match="no backing endpoint"):
+def _register_payload(**overrides) -> dict:
+    payload = {
+        "document_id": "d1",
+        "job_id": "j1",
+        "upload_ticket": "ticket-abc",
+        "expires_in_seconds": 900,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _job_status_payload(**overrides) -> dict:
+    payload = {
+        "job_id": "j1",
+        "job_type": "ingestion",
+        "state": "PARSING",
+        "document_id": "d1",
+        "document_version_id": "v1",
+        "attempt_count": 2,
+        "error": None,
+        "created_at": "2026-10-09T12:00:00+00:00",
+        "updated_at": "2026-10-09T12:01:00+00:00",
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestHttpIngestionRegister:
+    async def test_register_upload_success(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.method == "POST"
+            assert request.url.path == "/v1/documents/register"
+            import json
+
+            assert json.loads(request.content) == {
+                "filename": "a.pdf",
+                "mime_type": "application/pdf",
+                "file_size_bytes": 10,
+                "content_sha256": "ab" * 32,
+            }
+            # Caller identity travels as signed document_api headers.
+            assert request.headers["X-Druid-User-Id"] == "u1"
+            assert request.headers["X-Druid-Group-Id"] == "acme"
+            assert request.headers["X-Druid-Internal-Sig"].startswith("v1:")
+            return json_response(201, _register_payload(), request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        ticket = await client.register_upload(
+            make_ctx(),
+            filename="a.pdf",
+            mime_type="application/pdf",
+            file_size_bytes=10,
+            content_sha256="ab" * 32,
+        )
+        assert ticket.document_id == "d1"
+        assert ticket.job_id == "j1"
+        assert ticket.upload_ticket == "ticket-abc"
+        assert ticket.expires_in_seconds == 900
+
+    async def test_register_upload_rejection_maps_to_service_error(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(400, {"detail": "bad declaration"}, request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(ServiceClientError, match="HTTP 400"):
             await client.register_upload(
                 make_ctx(),
                 filename="a.pdf",
@@ -591,9 +655,113 @@ class TestHttpIngestionGaps:
                 content_sha256="ab" * 32,
             )
 
-    async def test_get_job_status_has_no_backing_endpoint(self):
-        client = HttpIngestionClient(DOCUMENT_API_URL, SECRET)
-        with pytest.raises(NotImplementedError, match="no backing endpoint"):
+    async def test_register_upload_404(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(404, {"detail": "not found"}, request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(NotFoundError, match="registration endpoint"):
+            await client.register_upload(
+                make_ctx(),
+                filename="a.pdf",
+                mime_type="application/pdf",
+                file_size_bytes=10,
+                content_sha256="ab" * 32,
+            )
+
+    async def test_register_upload_malformed_payload(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(201, {"unexpected": "shape"}, request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(ServiceClientError, match="malformed"):
+            await client.register_upload(
+                make_ctx(),
+                filename="a.pdf",
+                mime_type="application/pdf",
+                file_size_bytes=10,
+                content_sha256="ab" * 32,
+            )
+
+
+class TestHttpIngestionJobStatus:
+    async def test_get_job_status_success(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.method == "GET"
+            assert request.url.path == "/v1/jobs/j1"
+            assert request.headers["X-Druid-User-Id"] == "u1"
+            assert request.headers["X-Druid-Internal-Sig"].startswith("v1:")
+            return json_response(200, _job_status_payload(), request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        status = await client.get_job_status(make_ctx(), job_id="j1")
+        assert status.job_id == "j1"
+        assert status.document_id == "d1"
+        assert status.state == "PARSING"
+        assert status.progress_percent == 0
+        assert status.detail == ""
+
+    async def test_get_job_status_ready_reports_full_progress(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(
+                200, _job_status_payload(state="READY"), request
+            )
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        status = await client.get_job_status(make_ctx(), job_id="j1")
+        assert status.progress_percent == 100
+
+    async def test_get_job_status_surfaces_error_detail(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(
+                200,
+                _job_status_payload(state="FAILED", error="worker exploded"),
+                request,
+            )
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        status = await client.get_job_status(make_ctx(), job_id="j1")
+        assert status.state == "FAILED"
+        assert status.detail == "worker exploded"
+
+    async def test_get_job_status_404(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(404, {"detail": "not found"}, request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(NotFoundError, match="unknown job: j9"):
+            await client.get_job_status(make_ctx(), job_id="j9")
+
+    async def test_get_job_status_500(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(500, {"detail": "boom"}, request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(ServiceClientError, match="HTTP 500"):
+            await client.get_job_status(make_ctx(), job_id="j1")
+
+    async def test_get_job_status_malformed_payload(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return json_response(200, {"no": "state"}, request)
+
+        client = HttpIngestionClient(
+            DOCUMENT_API_URL, SECRET, transport=httpx.MockTransport(handler)
+        )
+        with pytest.raises(ServiceClientError, match="no 'state'"):
             await client.get_job_status(make_ctx(), job_id="j1")
 
 

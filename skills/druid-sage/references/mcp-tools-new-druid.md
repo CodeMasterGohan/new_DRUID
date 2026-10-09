@@ -42,8 +42,10 @@ MiniLM rerank, final top-8).
 
 ### ingest_document
 Registers an authorized **upload ticket** and enqueues ingestion (quota-checked).
-Bytes travel through the Document API (`POST /v1/documents/upload`) — the tool
-never fetches a URL.
+Bytes travel through the Document API two-phase flow — `POST
+/v1/documents/register` (declare, get ticket) then `POST
+/v1/documents/{id}/bytes` (redeem ticket, send bytes). The tool never
+fetches a URL.
 
 | Argument | Notes |
 |---|---|
@@ -117,6 +119,7 @@ A deletion job is not `DELETED` until every store confirms.
 - `resolve_review_item` and `delete_document` with `confirm: false` change
   nothing — re-invoke with `confirm: true`.
 - `ingest_document` does not accept the file bytes; it registers the ticket —
-  the bytes go through the Document API upload endpoint.
+  the bytes go through the Document API two-phase upload (`register` then
+  `{id}/bytes`).
 - Quota exhaustion (1,000 ingestion pages/day/tenant, 10 query QPS/tenant) returns
   429 with a `Retry-After` hint — back off, don't retry blindly.

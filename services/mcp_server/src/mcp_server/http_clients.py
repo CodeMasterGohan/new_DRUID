@@ -22,13 +22,6 @@ direct catalog HTTP API, and this module deliberately does not invent one.
 
 Documented gaps (not papered over):
 
-* ``HttpIngestionClient.register_upload`` — document_api has no
-  ticket-issuing upload endpoint. Its upload is a single multipart call
-  carrying the file bytes (``POST /v1/documents/upload``), which the MCP
-  ingest tool deliberately never holds. Raises :class:`NotImplementedError`.
-* ``HttpIngestionClient.get_job_status`` — document_api exposes job status
-  only per document (``GET /v1/documents/{id}/status``); there is no
-  job-scoped ``GET /v1/jobs/{job_id}``. Raises :class:`NotImplementedError`.
 * ``list_documents`` — document_api's list response carries no ``total``
   count and no per-document version status, so ``total`` is reported as
   ``offset + len(page)`` (exact when the page is short, otherwise a lower
@@ -623,39 +616,88 @@ class HttpCatalogClient(CatalogClient, _BaseHttpClient):
 class HttpIngestionClient(IngestionServiceClient, _BaseHttpClient):
     """Upload registration and job status via document_api.
 
-    Neither ABC method has a backing endpoint today (see the module
-    docstring); both raise :class:`NotImplementedError` with the exact gap
-    spelled out, rather than silently doing the wrong thing.
+    Two-phase upload (spec §5): :meth:`register_upload` declares the file
+    and receives a single-use upload ticket
+    (``POST /v1/documents/register``); the tool caller uploads the bytes
+    with that ticket (``POST /v1/documents/{id}/bytes``) and polls
+    :meth:`get_job_status` (``GET /v1/jobs/{job_id}``). This client never
+    holds the file bytes.
     """
 
     async def register_upload(
         self,
-        ctx: RequestContext,  # noqa: ARG002
+        ctx: RequestContext,
         *,
-        filename: str,  # noqa: ARG002
-        mime_type: str,  # noqa: ARG002
-        file_size_bytes: int,  # noqa: ARG002
-        content_sha256: str,  # noqa: ARG002
+        filename: str,
+        mime_type: str,
+        file_size_bytes: int,
+        content_sha256: str,
     ) -> UploadTicket:
-        raise NotImplementedError(
-            "register_upload has no backing endpoint: document_api's upload is "
-            "a single multipart call carrying the file bytes "
-            "(POST /v1/documents/upload), which the MCP ingest tool "
-            "deliberately never holds, and no ticket-issuing endpoint exists. "
-            "Either add POST /v1/documents/register to document_api (quota "
-            "check -> catalog record + job -> single-use upload ticket) or "
-            "change the ABC/tool to work with document_id directly."
+        operation = "ingestion register_upload"
+        secret = self._require_secret(operation)
+        response = await self._call(
+            "POST",
+            "/v1/documents/register",
+            sign_document_api_headers(ctx, secret),
+            operation,
+            json={
+                "filename": filename,
+                "mime_type": mime_type,
+                "file_size_bytes": file_size_bytes,
+                "content_sha256": content_sha256,
+            },
         )
+        self._raise_for_status(
+            response,
+            operation,
+            ok=(200, 201),
+            not_found_detail="upload registration endpoint not found",
+        )
+        payload = self._json(response, operation)
+        try:
+            return UploadTicket(
+                document_id=str(payload["document_id"]),
+                job_id=str(payload["job_id"]),
+                upload_ticket=str(payload["upload_ticket"]),
+                expires_in_seconds=int(payload["expires_in_seconds"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ServiceClientError(
+                f"{operation}: malformed registration payload: {exc}"
+            ) from exc
 
     async def get_job_status(
-        self, ctx: RequestContext, *, job_id: str  # noqa: ARG002
+        self, ctx: RequestContext, *, job_id: str
     ) -> JobStatus:
-        raise NotImplementedError(
-            "get_job_status has no backing endpoint: document_api exposes job "
-            "status only per document (GET /v1/documents/{document_id}/status); "
-            "there is no job-scoped GET /v1/jobs/{job_id}. Either add a "
-            "tenant-scoped GET /v1/jobs/{job_id} to document_api or change the "
-            "ABC/tool to take document_id."
+        operation = "ingestion get_job_status"
+        secret = self._require_secret(operation)
+        response = await self._call(
+            "GET",
+            f"/v1/jobs/{job_id}",
+            sign_document_api_headers(ctx, secret),
+            operation,
+        )
+        self._raise_for_status(
+            response,
+            operation,
+            ok=(200,),
+            not_found_detail=f"unknown job: {job_id}",
+        )
+        payload = self._json(response, operation)
+        try:
+            state = str(payload["state"])
+        except KeyError as exc:
+            raise ServiceClientError(
+                f"{operation}: status payload has no 'state': {exc}"
+            ) from exc
+        # The API reports no progress percentage; READY is the only
+        # terminal success state, so progress reads 100 there, 0 otherwise.
+        return JobStatus(
+            job_id=str(payload.get("job_id", job_id)),
+            document_id=str(payload.get("document_id") or ""),
+            state=state,
+            progress_percent=100 if state == "READY" else 0,
+            detail=str(payload.get("error") or ""),
         )
 
 
