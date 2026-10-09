@@ -132,10 +132,11 @@ the tag at deploy time — FP8 on Hopper (sm_90a) requires a build with
 FP8 kernels. Also verify the image ships <code>curl</code>: the healthcheck is
 <code>curl -f http://localhost:8000/health</code> (named gap, flagged 2026-10-08).</p>
 <h2 id="image-and-dependency-notes">Image and dependency notes</h2>
-<h3 id="minio-tag-unpinned">MinIO tag unpinned</h3>
-<p>Compose uses <code>minio/minio:latest</code> with a TODO to pin a dated RELEASE tag
-at deploy time (the tag could not be verified offline). Pin it before
-production.</p>
+<h3 id="object-storage-rustfs-replaced-minio">Object storage: RustFS (replaced MinIO)</h3>
+<p>MinIO's community edition was archived in 2026 (no new images, Docker Hub
+repos deleted), so the stack now uses <code>rustfs/rustfs:1.0.1</code> (pinned,
+S3-compatible, Apache 2.0). The <code>minio</code> Python client talks to it
+unmodified. Health endpoint: <code>http://localhost:9000/health</code>.</p>
 <h3 id="dependency-pins-are-initial-lockfiles">Dependency pins are initial lockfiles</h3>
 <p>Every <code>requirements.txt</code> has <code>==</code> pins, but <code>pip-compile</code> was never run
 against PyPI for a release (regenerate before release). Two phantom pins
@@ -167,7 +168,7 @@ hand; build the corpus first.</p>
 <ol>
 <li><code>docker network create druid-net</code> before <code>up</code>.</li>
 <li>Secrets filled in <code>.env</code> (<code>INTERNAL_SECRET</code>, <code>JWT_SECRET</code>,
-   <code>POSTGRES_PASSWORD</code>, <code>MINIO_ROOT_PASSWORD</code>); template values are not
+   <code>POSTGRES_PASSWORD</code>, <code>RUSTFS_SECRET_KEY</code>); template values are not
    secrets.</li>
 <li>Model checkpoints staged at <code>$MODEL_DIR</code> per the manifests.</li>
 <li>One-shot <code>catalog</code> + <code>milvus_setup</code> jobs exit 0 before starting

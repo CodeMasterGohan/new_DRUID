@@ -67,9 +67,9 @@ fixed; these change only the host side (e.g. when colocating with new_DRUID).</p
 <td>Catalog Postgres credentials. <strong>Change the passwords.</strong></td>
 </tr>
 <tr>
-<td><code>MINIO_ROOT_USER</code> / <code>MINIO_ROOT_PASSWORD</code></td>
-<td><code>sage</code> / <code>sage-minio</code></td>
-<td>MinIO root credentials. <strong>Change the password.</strong></td>
+<td><code>RUSTFS_ACCESS_KEY</code> / <code>RUSTFS_SECRET_KEY</code></td>
+<td><code>sage</code> / <code>sage-rustfs</code></td>
+<td>RustFS credentials. <strong>Change the secret.</strong></td>
 </tr>
 <tr>
 <td><code>MILVUS_COLLECTION</code></td>
@@ -98,37 +98,37 @@ fixed; these change only the host side (e.g. when colocating with new_DRUID).</p
 </tr>
 <tr>
 <td><code>MCP_HOST_PORT</code></td>
-<td><code>8000</code></td>
+<td><code>8010</code></td>
 <td>Host port for mcp-server</td>
 </tr>
 <tr>
 <td><code>RETRIEVAL_HOST_PORT</code></td>
-<td><code>8001</code></td>
+<td><code>8011</code></td>
 <td>Host port for retrieval</td>
 </tr>
 <tr>
 <td><code>EMBEDDING_HOST_PORT</code></td>
-<td><code>8002</code></td>
+<td><code>8012</code></td>
 <td>Host port for embedding</td>
 </tr>
 <tr>
 <td><code>MILVUS_HOST_PORT</code> / <code>MILVUS_MGMT_HOST_PORT</code></td>
-<td><code>19530</code> / <code>9091</code></td>
+<td><code>19531</code> / <code>9092</code></td>
 <td>Host ports for Milvus</td>
 </tr>
 <tr>
-<td><code>MINIO_HOST_PORT</code> / <code>MINIO_CONSOLE_HOST_PORT</code></td>
-<td><code>9000</code> / <code>9001</code></td>
-<td>Host ports for MinIO</td>
+<td><code>RUSTFS_HOST_PORT</code> / <code>RUSTFS_CONSOLE_HOST_PORT</code></td>
+<td><code>9010</code> / <code>9011</code></td>
+<td>Host ports for RustFS</td>
 </tr>
 <tr>
 <td><code>REDIS_HOST_PORT</code></td>
-<td><code>6379</code></td>
+<td><code>6380</code></td>
 <td>Host port for Redis</td>
 </tr>
 <tr>
 <td><code>POSTGRES_HOST_PORT</code></td>
-<td><code>5432</code></td>
+<td><code>5433</code></td>
 <td>Host port for Postgres</td>
 </tr>
 </tbody>
@@ -381,14 +381,24 @@ design; the service must never request GPU resources.</p>
 <td>Embedding service</td>
 </tr>
 <tr>
-<td><code>MINIO_ENDPOINT</code></td>
+<td><code>RUSTFS_ENDPOINT</code></td>
 <td>(required)</td>
 <td>Snapshot store</td>
 </tr>
 <tr>
-<td><code>MINIO_ROOT_USER</code> / <code>MINIO_ROOT_PASSWORD</code></td>
+<td><code>RUSTFS_ACCESS_KEY</code> / <code>RUSTFS_SECRET_KEY</code></td>
 <td>(required)</td>
-<td>MinIO auth</td>
+<td>RustFS auth</td>
+</tr>
+<tr>
+<td><code>RUSTFS_BUCKET</code></td>
+<td><code>sage-snapshots</code></td>
+<td>Snapshot bucket</td>
+</tr>
+<tr>
+<td><code>RUSTFS_SECURE</code></td>
+<td><code>false</code></td>
+<td>TLS to RustFS</td>
 </tr>
 </tbody>
 </table>
@@ -413,24 +423,69 @@ design; the service must never request GPU resources.</p>
 <td>Catalog Postgres</td>
 </tr>
 <tr>
-<td><code>MINIO_ENDPOINT</code></td>
+<td><code>RUSTFS_ENDPOINT</code></td>
 <td>(required)</td>
 <td>Snapshot store</td>
 </tr>
 <tr>
-<td><code>MINIO_ACCESS_KEY</code> / <code>MINIO_SECRET_KEY</code></td>
-<td>required for real MinIO</td>
-<td>Snapshot store auth (compose maps the MinIO root credentials)</td>
+<td><code>RUSTFS_ACCESS_KEY</code> / <code>RUSTFS_SECRET_KEY</code></td>
+<td>required for real RustFS</td>
+<td>Snapshot store auth (compose maps the RustFS credentials)</td>
 </tr>
 <tr>
-<td><code>MINIO_BUCKET</code></td>
+<td><code>RUSTFS_BUCKET</code></td>
 <td><code>sage-snapshots</code></td>
 <td>Snapshot bucket</td>
 </tr>
 <tr>
-<td><code>MINIO_SECURE</code></td>
+<td><code>RUSTFS_SECURE</code></td>
 <td><code>false</code></td>
-<td>TLS to MinIO</td>
+<td>TLS to RustFS</td>
+</tr>
+</tbody>
+</table>
+<h2 id="scheduler">scheduler</h2>
+<p>The <code>scheduler</code> compose service runs the weekly <code>refresh_stale</code> sweep
+(<code>services/scheduler/</code>; calls <code>services.crawler.jobs.refresh_stale()</code>
+in-process — see <a href="sage-ingestion-freshness.html">sage-ingestion-freshness.html</a>).</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>REDIS_URL</code></td>
+<td>(required)</td>
+<td>RQ transport — the sweep enqueues crawl jobs</td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td>(required)</td>
+<td>Catalog Postgres — the sweep lists stale versions</td>
+</tr>
+<tr>
+<td><code>REFRESH_INTERVAL_SECONDS</code></td>
+<td><code>604800</code> (7 days)</td>
+<td>sweep interval; plain seconds or <code>s</code>/<code>m</code>/<code>h</code>/<code>d</code> suffix (<code>7d</code>)</td>
+</tr>
+<tr>
+<td><code>SCHEDULER_STARTUP_JITTER_SECONDS</code></td>
+<td><code>600</code></td>
+<td>max uniform startup delay before the first run; <code>0</code> disables</td>
+</tr>
+<tr>
+<td><code>SCHEDULER_BACKOFF_CAP_MULTIPLIER</code></td>
+<td><code>8</code></td>
+<td>failure backoff capped at this × interval</td>
+</tr>
+<tr>
+<td><code>SCHEDULER_LOG_LEVEL</code></td>
+<td><code>INFO</code></td>
+<td>log level</td>
 </tr>
 </tbody>
 </table>
@@ -444,8 +499,8 @@ not an environment variable in the reviewed sources. See
 <li>The derived <code>EMBEDDING_*</code> names above follow the <code>env_prefix="EMBEDDING_"</code>
   convention in <code>services/embedding/settings.py</code>; the file was reviewed and
   the listed fields match it.</li>
-<li>No scheduler-related variables exist in the reviewed sources — the weekly
-  refresh and monthly DevDocs sync have no scheduling configuration yet.</li>
+<li>No scheduler-related variables exist for the monthly DevDocs sync — it has
+  no scheduling configuration yet (see <a href="sage-ingestion-freshness.html">sage-ingestion-freshness.html</a>).</li>
 <li>No ingestion tunables (chunk target/overlap, politeness rate) are exposed
   as env vars in the reviewed sources; they are code constants
   (420/48 chunking, 1 req/s per host, 5000-URL sitemap cap).</li>
