@@ -982,3 +982,116 @@ in document_api, reachable via the gateway's /v1/{path:path} proxy:
   document_api suite: 49 passed (34 existing + 15 new). Catalog suite:
   16 passed. web_ui suite: 32 passed (README/api_client comments updated
   from "proposed" to implemented).
+
+---
+
+## 2026-10-09 — Follow-ups: port fix, real MCP HTTP clients (Finch)
+
+### 1. Host-port collision fix
+- `deploy/docker-compose.yml`: gateway host default `${GATEWAY_PORT:-8000}` →
+  `${GATEWAY_PORT:-8080}`, matching `.env.example` (was inconsistent; vLLM keeps
+  host 8000). Compose-DNS/container ports untouched.
+- `tests/test_deploy_wiring.py`: new `test_no_host_port_collision_within_compose_files`
+  and `test_no_host_port_collision_across_druid_and_sage` — parse `ports:` from
+  druid-cpu, druid-gpu, and New_sage compose files, resolve `${VAR:-default}` via
+  each project's `.env.example`, fail on any duplicate host port. Sage tree
+  auto-discovered at `~/workspace/new_sage/build` (`NEW_SAGE_BUILD_ROOT` override);
+  skips (not fails) when absent so the repo stays self-contained. Includes a
+  negative test proving an injected collision is detected.
+- Also fixed a pre-existing docs bug found while here: `docs-site` smoke test had
+  the gateway check at `localhost:8000/healthz` instead of `8080`.
+
+### 2. Real MCP downstream HTTP clients
+- New `services/mcp_server/src/mcp_server/http_clients.py`: httpx-based
+  `HttpRetrievalClient`, `HttpCatalogClient`, `HttpIngestionClient` honoring the
+  ABC signatures; 404 → existing `NotFoundError`, other failures → new
+  `ServiceClientError` (the ABC defines no exception for those cases). Internal
+  identity headers signed byte-exact per each downstream verifier (verified
+  against `document_api.internal_auth` and `retrieval.main` verifiers).
+- No direct catalog HTTP API exists — catalog reads go through document_api's
+  existing endpoints (nothing invented): `list_documents` → `GET /v1/documents`
+  + bounded per-item detail enrichment (status filters other than
+  REVIEW_REQUIRED applied client-side; documented approximation);
+  `get_review_item` → `GET /v1/review/items/{id}` (opaque storage keys, never
+  presigned URLs); `resolve_review_item` → `POST …/resolve` (accept→accepted,
+  reroute→re-routed, reject→rejected); `delete_document` → `DELETE
+  /v1/documents/{id}`.
+- Gaps (documented in code + README): `register_upload` → NotImplementedError
+  (no ticket-issuing endpoint; document_api upload is single multipart with
+  bytes the MCP tool never holds — fix: add `POST /v1/documents/register` or
+  change the ABC); `get_job_status(job_id)` → NotImplementedError (no
+  job-scoped endpoint; only per-document status — fix: add tenant-scoped
+  `GET /v1/jobs/{job_id}` or change the ABC).
+- `server.py`: real clients by default; fakes only behind
+  `DRUID_MCP_DEV_FAKE_CLIENTS=1`. New settings: `retrieval_url`,
+  `document_api_url`, `internal_secret`, `downstream_timeout_seconds`.
+- `deploy/docker-compose.yml`: removed `DRUID_MCP_DEV_FAKE_CLIENTS=1` from
+  mcp_server; `depends_on` now `[document_api, retrieval]`. `.env.example`:
+  added `RETRIEVAL_URL=http://retrieval:8004`, `MCP_DOWNSTREAM_TIMEOUT_SECONDS=30`.
+- Tests: `services/mcp_server/tests/test_http_clients.py` — 31 tests with
+  `httpx.MockTransport` (success + error paths per method). mcp_server suite:
+  106 passed (75 existing + 31 new). Build-root suite: 319 passed, 4 skipped
+  (`--ignore=services/web_ui`; web_ui collection error is pre-existing —
+  standalone web_ui suite still 32/32).
+
+## 2026-10-09 — MinIO → RustFS swap (James-approved; local only, not pushed)
+
+MinIO community edition is dead (repo archived, Docker Hub repos deleted).
+Swapped the object-store backend to RustFS `rustfs/rustfs:1.0.1` (pinned),
+per his standing call from the port/minio review. The `minio` Python client
+is kept unchanged — it works unmodified against any S3-compatible backend.
+
+- `deploy/docker-compose.yml`: `minio` service replaced with `rustfs`
+  (`--console-address ":9001"`, env `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY`,
+  named volume `rustfsdata:/data`, healthcheck on `http://localhost:9000/health`).
+  Milvus keeps its required `MINIO_*` names but now points at
+  `rustfs:9000` / `${RUSTFS_ACCESS_KEY}` / `${RUSTFS_SECRET_KEY}`; `depends_on`
+  and the "shares OUR MinIO" comment updated; stale "pin dated RELEASE tag"
+  TODO deleted with the old service.
+- `.env.example`: `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` →
+  `RUSTFS_ACCESS_KEY=druid`/`RUSTFS_SECRET_KEY=change-me-min-8-chars`,
+  `RUSTFS_ENDPOINT=rustfs:9000`, `RUSTFS_BUCKET=druid-artifacts`.
+- `services/document_api/`: `settings.py` — `object_store` default `"rustfs"`,
+  `rustfs_endpoint`/`rustfs_access_key` (`AliasChoices("RUSTFS_ACCESS_KEY")`) /
+  `rustfs_secret_key` (`AliasChoices("RUSTFS_SECRET_KEY")`) / `rustfs_bucket` /
+  `rustfs_secure` / `rustfs_presign_expiry_seconds`; no legacy MINIO_* aliases
+  (clean break — not deployed yet). `storage.py` — `MinIOObjectStore` →
+  `RustFSObjectStore` (class, `__all__`, error message, docstring). `deps.py`,
+  `main.py` (startup banner), `routes/documents.py`, `routes/review.py` updated
+  to the `rustfs_*` attributes.
+- `services/ingestion/pipeline.py`: `MinIOObjectStore` → `RustFSObjectStore`
+  (class, `__all__`, error message); "MinIO in production" docstrings →
+  "RustFS in production"; `'MinIO key of the original'` → `'S3 key of the original'`.
+  Same S3-key wording applied to `document_api/job_queue.py`.
+- Remaining comment/README mentions swept in `catalog/models.py`,
+  `ingestion/embeddings.py`, `ingestion/README.md`, `document_api/README.md`,
+  `embedding/main.py` + `README.md`, `web_ui/{api_client.py,main.py,README.md}`.
+- Tests: `services/web_ui/tests/conftest.py` and
+  `services/mcp_server/tests/test_http_clients.py` fake presigned URLs
+  `http://minio/...` → `http://rustfs/...`.
+- Docs (living only): `docs/runbook.md` (bring-up command now
+  `up -d postgres redis rustfs etcd milvus`; sizing-table row renamed),
+  `docs/backup-restore.md` (`mc mirror` → `rclone sync` to an S3 remote,
+  service names minio→rustfs). `docs/architecture-spec-v2.1.md` untouched
+  (versioned snapshot).
+- Verification: `docker` is not installed in this VM, so
+  `docker compose config` could not be run; compose YAML was validated by
+  parsing with PyYAML (service/env/volume/depends_on all as intended).
+  Tests: build-root suite 319 passed, 4 skipped (`--ignore=services/web_ui`;
+  pre-existing web_ui collection issue, see above) + standalone web_ui suite
+  32 passed — zero failures from the rename.
+- Not in scope (left for a later pass): `docs/architecture-spec-v2.1.md`
+  history entries, `skills/druid-sage/references/{deployment,troubleshooting}.md`
+  MinIO mentions, and build-root `README.md` MinIO lines — all flagged, none changed.
+
+## 2026-10-09 — Docs/skill sync for MinIO→RustFS swap (Finch)
+
+- `~/workspace/druid-sage-docs/src/`: all MinIO references updated to RustFS
+  (`druid-deployment.md`, `druid-architecture.md`, `druid-configuration.md`,
+  `druid-operations.md`, `druid-troubleshooting.md` — incl. a new "Object
+  storage: RustFS (replaced MinIO)" note, `druid-web-ui.md`,
+  `druid-api-reference.md`). Site rebuilt: link check 378/378 pass.
+- `~/workspace/skills/druid-sage/references/`: `deployment.md`,
+  `troubleshooting.md` updated; re-synced into `build/skills/druid-sage/`.
+- `build/docs-site/` re-synced from `~/workspace/druid-sage-docs/` (39 files).
+- `docs/architecture-spec-v2.1.md` deliberately untouched (versioned snapshot).
