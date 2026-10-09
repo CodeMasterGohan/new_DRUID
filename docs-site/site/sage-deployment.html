@@ -65,7 +65,7 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.</p>
 <tr>
 <th>Service</th>
 <th>Container port</th>
-<th>Default host port</th>
+<th>Host port</th>
 <th>Notes</th>
 </tr>
 </thead>
@@ -74,18 +74,18 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.</p>
 <td><code>mcp-server</code></td>
 <td>8000</td>
 <td><code>MCP_HOST_PORT</code> → 8010</td>
-<td>FastMCP, binds <code>0.0.0.0:8000</code> in-container</td>
+<td>FastMCP, binds <code>0.0.0.0:8000</code> in-container; published for the AI CLI</td>
 </tr>
 <tr>
 <td><code>retrieval</code></td>
 <td>8001</td>
-<td><code>RETRIEVAL_HOST_PORT</code> → 8011</td>
+<td>— (internal-only)</td>
 <td></td>
 </tr>
 <tr>
 <td><code>embedding</code></td>
 <td>8002</td>
-<td><code>EMBEDDING_HOST_PORT</code> → 8012</td>
+<td>— (internal-only)</td>
 <td></td>
 </tr>
 <tr>
@@ -103,25 +103,25 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.</p>
 <tr>
 <td><code>milvus-standalone</code></td>
 <td>19530 / 9091</td>
-<td><code>MILVUS_HOST_PORT</code> → 19531 / <code>MILVUS_MGMT_HOST_PORT</code> → 9092</td>
+<td>— (internal-only)</td>
 <td><code>milvusdb/milvus:latest</code> (CPU); shares RustFS bucket <code>sage-milvus</code></td>
 </tr>
 <tr>
 <td><code>rustfs</code></td>
 <td>9000 / 9001</td>
-<td><code>RUSTFS_HOST_PORT</code> → 9010 / <code>RUSTFS_CONSOLE_HOST_PORT</code> → 9011</td>
+<td>— (internal-only)</td>
 <td><code>rustfs/rustfs:1.0.1</code> (S3-compatible; replaced MinIO, whose community edition was archived in 2026)</td>
 </tr>
 <tr>
 <td><code>postgres</code></td>
 <td>5432</td>
-<td><code>POSTGRES_HOST_PORT</code> → 5433</td>
+<td>— (internal-only)</td>
 <td><code>postgres:16.6-alpine</code></td>
 </tr>
 <tr>
 <td><code>redis</code></td>
 <td>6379</td>
-<td><code>REDIS_HOST_PORT</code> → 6380</td>
+<td>— (internal-only)</td>
 <td><code>redis:7.4.2-alpine</code>, AOF enabled</td>
 </tr>
 <tr>
@@ -144,14 +144,14 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.</p>
 </tr>
 </tbody>
 </table>
+<p>Host-port policy (2026-10-09): only <code>mcp-server</code> publishes a host port;
+everything else is container-to-container on the compose/<code>cora</code> networks.</p>
 <p>Named volumes: <code>pgdata</code>, <code>redisdata</code>, <code>rustfsdata</code>, <code>etcddata</code>, <code>milvusdata</code>,
 <code>model-artifacts</code>.</p>
-<p>The port contract is fixed on the container side. The default host ports sit
-in a separate block from new_DRUID's (gateway 8080, vLLM 8000, document_api
-8001, mcp 8002, embedding 8003, retrieval 8004, web_ui 8005, rustfs 9000/9001,
-milvus 19530/9091), so the two stacks no longer collide out of the box. If
-you need different ports, remap the <code>${*_HOST_PORT}</code> variables in <code>.env</code> —
-inter-service URLs use compose DNS names and fixed container ports, so they
+<p>The port contract is fixed on the container side. Host-port policy
+(2026-10-09): only <code>mcp-server</code> publishes a host port (<code>MCP_HOST_PORT</code> →
+8010, for the AI CLI); everything else is container-to-container.
+Inter-service URLs use compose DNS names and fixed container ports, so they
 never need changing.</p>
 <h2 id="model-artifact-staging">Model artifact staging</h2>
 <p>Services are offline-first: they load pre-staged artifacts from the

@@ -73,13 +73,13 @@ was fixed to <code>uvicorn app:app</code> and is covered by a deploy-wiring test
 if you hit an import error on gateway startup, check the CMD against the
 module layout first.</p>
 <h2 id="port-and-network-collisions">Port and network collisions</h2>
-<h3 id="host-port-collision-gateway-vs-vllm">Host port collision: gateway vs vLLM</h3>
+<h3 id="host-port-collision-gateway-vs-vllm-historical">Host port collision: gateway vs vLLM (historical)</h3>
 <p>The original <code>.env.example</code> set <code>GATEWAY_PORT=8000</code> and <code>VLLM_PORT=8000</code>
-on the same H200 host — both compose projects bind the host port. The
-fix: <code>GATEWAY_PORT=8080</code> (container still listens on 8000; only the host
-mapping moved). A deploy-wiring test asserts no host-port collision
-across the two compose projects. If services fail to bind, check this
-first.</p>
+on the same H200 host — both compose projects bound the host port. This was
+first fixed with <code>GATEWAY_PORT=8080</code>, then superseded 2026-10-09 by the
+host-port minimization policy: neither publishes a host port anymore
+(container-to-container only). If services fail to bind, check the
+allowlist test <code>test_only_allowlisted_services_publish_host_ports</code> first.</p>
 <h3 id="ingestion-workers-cant-reach-vllm">Ingestion workers can't reach vLLM</h3>
 <p>Two related fixes landed: the olmOCR client defaulted to
 <code>http://olmocr-vllm:8000</code> (no such service) — corrected to
@@ -173,9 +173,9 @@ hand; build the corpus first.</p>
 <li>Model checkpoints staged at <code>$MODEL_DIR</code> per the manifests.</li>
 <li>One-shot <code>catalog</code> + <code>milvus_setup</code> jobs exit 0 before starting
    services.</li>
-<li>No host-port collision across compose projects (gateway 8080, vLLM
-   8000, document_api 8001, mcp_server 8002, embedding 8003, retrieval
-   8004, web_ui 8005).</li>
+<li>Only the allowlisted host ports are published (web_ui 8005, DRUID
+   mcp_server 8002, SAGE mcp-server 8010) — enforced by
+   <code>test_only_allowlisted_services_publish_host_ports</code>.</li>
 <li>Burn in quotas before production traffic.</li>
 </ol>
 </main>
