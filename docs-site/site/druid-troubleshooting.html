@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a class="active" aria-current="page" href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-troubleshooting">new_DRUID — Troubleshooting</h1>
+<p>Every entry below has a source basis: the build log's wiring-fix and gap
+sections, the deploy files, or the service code itself.</p>
+<h2 id="startup-failures">Startup failures</h2>
+<h3 id="model-artifact-missing-service-fails-at-startup">Model artifact missing → service fails at startup</h3>
+<p>The embedding service, retrieval service, ingestion workers, and vLLM
+mount <code>${MODEL_DIR:-/models}</code> <strong>read-only</strong> and run with
+<code>HF_HUB_OFFLINE=1</code> / <code>TRANSFORMERS_OFFLINE=1</code>. A missing or invalid
+checkpoint (olmOCR-2-7B-1025-FP8, embeddinggemma-2, or
+cross-encoder/ms-marco-MiniLM-L6-v2) <strong>fails startup loudly and names the
+artifact and the expected mount path</strong> — it never downloads at runtime.
+This is the intended offline-first behavior, not a bug. Fix: complete the
+artifact manifests (<code>services/artifacts/manifests/</code>) and stage the
+checkpoint under <code>$MODEL_DIR/&lt;org&gt;/&lt;name&gt;</code> before starting.</p>
+<h3 id="mcp_server-crash-loops-in-compose">mcp_server crash-loops in compose</h3>
+<p><code>create_app()</code> raises <code>RuntimeError</code> unless real service clients are
+wired or <code>DRUID_MCP_DEV_FAKE_CLIENTS=1</code> is set. The shipped compose file
+sets <code>DRUID_MCP_DEV_FAKE_CLIENTS: "1"</code> (with a TODO to remove once the
+real retrieval/ingestion/catalog HTTP clients land). If you removed it
+without wiring real clients, the container restarts forever — re-add the
+flag or wire the clients. Note: dev/fake clients must never serve real
+tenant data.</p>
+<h3 id="gateway-dockerfile-cmd">Gateway Dockerfile CMD</h3>
+<p>An earlier wiring bug had the gateway CMD pointing at a <code>main:app</code>
+entrypoint that didn't exist (the gateway package ships <code>app.py</code>). This
+was fixed to <code>uvicorn app:app</code> and is covered by a deploy-wiring test —
+if you hit an import error on gateway startup, check the CMD against the
+module layout first.</p>
+<h2 id="port-and-network-collisions">Port and network collisions</h2>
+<h3 id="host-port-collision-gateway-vs-vllm">Host port collision: gateway vs vLLM</h3>
+<p>The original <code>.env.example</code> set <code>GATEWAY_PORT=8000</code> and <code>VLLM_PORT=8000</code>
+on the same H200 host — both compose projects bind the host port. The
+fix: <code>GATEWAY_PORT=8080</code> (container still listens on 8000; only the host
+mapping moved). A deploy-wiring test asserts no host-port collision
+across the two compose projects. If services fail to bind, check this
+first.</p>
+<h3 id="ingestion-workers-cant-reach-vllm">Ingestion workers can't reach vLLM</h3>
+<p>Two related fixes landed: the olmOCR client defaulted to
+<code>http://olmocr-vllm:8000</code> (no such service) — corrected to
+<code>http://vllm-olmocr:8000</code> (or set <code>OLMOCR_VLLM_URL</code>) — and the CPU and
+GPU compose projects shared no network. Both projects must attach to the
+shared <strong>external <code>druid-net</code></strong> (<code>docker network create druid-net</code> once
+per host); <code>ingestion</code> and <code>vllm-olmocr</code> attach to it so workers resolve
+<code>vllm-olmocr</code> by service name. Without it, DNS resolution fails and
+visual-path pages error out.</p>
+<h2 id="database-and-migrations">Database and migrations</h2>
+<h3 id="alembic-not-run">Alembic not run</h3>
+<p><code>docker compose run --rm catalog</code> (alembic upgrade head) must exit 0
+<strong>before</strong> starting services. The migration module imports cleanly but
+has not been executed against live PostgreSQL in this environment —
+watch the one-shot job's output on first deploy. <code>alembic/env.py</code>
+requires <code>DATABASE_URL</code> and refuses to guess.</p>
+<h3 id="auth-failures-across-services-401403-on-internal-hops">Auth failures across services (401/403 on internal hops)</h3>
+<p>The gateway signs <code>X-Druid-*</code> identity headers with <code>INTERNAL_SECRET</code>;
+document_api, retrieval, and others verify them byte-exactly and fail
+closed. If internal calls 401/403 while direct calls work, the
+<code>INTERNAL_SECRET</code> values differ between services (or are unconfigured —
+"Never commit a filled value", and the template ships it empty). The
+mcp_server's <code>JWT_SECRET</code> / <code>JWT_PUBLIC_KEY_PEM</code> pair is separate and
+required for bearer-token verification.</p>
+<h2 id="quotas-and-redis">Quotas and Redis</h2>
+<h3 id="redis-down-quota-usage-reads-as-null-not-zero">Redis down → quota usage reads as null, not zero</h3>
+<p>The admin quotas page reports <code>ingest_pages_used</code> / <code>query_qps</code> as
+<strong>null</strong> when Redis is unreachable, rather than a misleading zero
+(logged at WARNING). If you see nulls, check Redis — don't treat it as
+"no usage". Non-admin quota behavior: without Redis, the gateway falls
+back to the <code>InMemoryQuotaStore</code>, which is correct for a single process
+only; in a multi-replica deployment, quota accounting silently drifts.
+The Redis Lua quota scripts are not exercised against a live Redis in
+this build (named gap — needs an integration test).</p>
+<h3 id="quota-tuning-is-provisional">Quota tuning is provisional</h3>
+<p><code>QUOTA_INGEST_PAGES_PER_DAY=1000</code> and <code>QUOTA_QUERY_QPS=10</code> are estimates.
+The runbook requires a throughput burn-in before production traffic —
+measure pages/hour against the H200 and adjust. Ingestion concurrency
+and quotas are the levers for GPU KV-cache pressure (see below).</p>
+<h2 id="vllm-gpu">vLLM / GPU</h2>
+<h3 id="oom-or-kv-cache-pressure-under-burst">OOM or KV-cache pressure under burst</h3>
+<p>Do <strong>not</strong> lower <code>--gpu-memory-utilization</code> below 0.7 as a first move —
+that is the wrong direction. Cap ingestion worker concurrency
+(<code>--scale ingestion=N</code>) and/or the ingestion quota instead. Measure
+olmOCR pages/hour while embedding/query services are under load (§13
+GPU-arbitration check).</p>
+<h3 id="vllm-image-fp8-on-hopper">vLLM image / FP8 on Hopper</h3>
+<p>The compose entry pins <code>vllm/vllm-openai:v0.7.3</code> with a TODO to verify
+the tag at deploy time — FP8 on Hopper (sm_90a) requires a build with
+FP8 kernels. Also verify the image ships <code>curl</code>: the healthcheck is
+<code>curl -f http://localhost:8000/health</code> (named gap, flagged 2026-10-08).</p>
+<h2 id="image-and-dependency-notes">Image and dependency notes</h2>
+<h3 id="minio-tag-unpinned">MinIO tag unpinned</h3>
+<p>Compose uses <code>minio/minio:latest</code> with a TODO to pin a dated RELEASE tag
+at deploy time (the tag could not be verified offline). Pin it before
+production.</p>
+<h3 id="dependency-pins-are-initial-lockfiles">Dependency pins are initial lockfiles</h3>
+<p>Every <code>requirements.txt</code> has <code>==</code> pins, but <code>pip-compile</code> was never run
+against PyPI for a release (regenerate before release). Two phantom pins
+were already caught and fixed: <code>pdftext==0.4.2</code> → <code>0.4.1</code> and
+<code>olmocr==0.4.0</code> → <code>0.4.27</code> (the 0.4.0 line never published; 0.4.27 keeps
+transformers under the <code>gpu</code> extra only, and its prompt builder is
+byte-identical). EmbeddingGemma 2 required a re-pin to
+<code>sentence-transformers==6.1.0</code> / <code>transformers==5.18.0</code> (the released
+checkpoint needs ST ≥ 6.1.0 / transformers 5.x). If model loading fails
+with import or API errors, re-check the pins before blaming the
+checkpoint.</p>
+<h2 id="retrieval-quality-and-activation">Retrieval quality and activation</h2>
+<h3 id="documents-never-become-searchable">Documents never become searchable</h3>
+<p>Only <code>READY</code> <strong>active</strong> versions are searchable (the catalog hard
+filter). If a document is stuck: check its status — <code>REVIEW_REQUIRED</code>
+means pages are parked in the review queue (human decision needed, never
+auto-retried); <code>FAILED</code> shows diagnostics in the Quarantine UI page;
+<code>activate_version()</code> additionally refuses when the chunk count falls
+outside <code>[min,max]_chunks_per_page × page_count</code> from
+<code>parser_revision_stats</code> — which must be <strong>seeded from the M1 eval corpus</strong>
+before range checks are meaningful.</p>
+<h3 id="router-thresholds-are-provisional">Router thresholds are provisional</h3>
+<p>The page router's thresholds (text density, replacement-char ratio, etc.)
+are marked PROVISIONAL pending the ≥95% routing-accuracy gate on the M1
+eval corpus. Systematic mis-routing (good pages quarantined, or visual
+pages parsed natively) is expected until M1 calibration — don't tune by
+hand; build the corpus first.</p>
+<h2 id="checklist-summary">Checklist summary</h2>
+<ol>
+<li><code>docker network create druid-net</code> before <code>up</code>.</li>
+<li>Secrets filled in <code>.env</code> (<code>INTERNAL_SECRET</code>, <code>JWT_SECRET</code>,
+   <code>POSTGRES_PASSWORD</code>, <code>MINIO_ROOT_PASSWORD</code>); template values are not
+   secrets.</li>
+<li>Model checkpoints staged at <code>$MODEL_DIR</code> per the manifests.</li>
+<li>One-shot <code>catalog</code> + <code>milvus_setup</code> jobs exit 0 before starting
+   services.</li>
+<li>No host-port collision across compose projects (gateway 8080, vLLM
+   8000, document_api 8001, mcp_server 8002, embedding 8003, retrieval
+   8004, web_ui 8005).</li>
+<li>Burn in quotas before production traffic.</li>
+</ol>
+</main>
+</body>
+</html>

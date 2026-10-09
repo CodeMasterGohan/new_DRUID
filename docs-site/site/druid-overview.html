@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a class="active" aria-current="page" href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-overview">new_DRUID — Overview</h1>
+<p>new_DRUID is a <strong>self-hosted, multi-tenant, local-first RAG + MCP document knowledge system</strong>. Organizations run it on their own hardware: documents are ingested, parsed, chunked, embedded, and indexed locally, and retrieval is exposed through an authenticated REST API, a tenant web UI, and an MCP server for AI agents. Nothing leaves the box; there is no external model provider and no cloud dependency.</p>
+<p><strong>Status:</strong> the build (all services, wiring, and unit/integration tests) is complete and green — latest full sweep: <strong>273 passed, 4 skipped</strong> (the skips are live-Milvus tests). Model weights are <strong>not staged</strong>, full ingestion has <strong>not run</strong>, and live-infrastructure tests have <strong>not run</strong>; those need the target hardware (see <a href="druid-deployment.html">Deployment</a>).</p>
+<h2 id="deployment-target">Deployment target</h2>
+<p>One machine with a single <strong>NVIDIA H200 (141 GB HBM3e)</strong>. All services except vLLM run on CPU/host RAM. vLLM serving the olmOCR vision model is the <strong>only GPU consumer</strong> — embedding and the reranker run on CPU by policy, not by accident (see <a href="druid-architecture.html">Architecture</a>).</p>
+<h2 id="key-properties">Key properties</h2>
+<ul>
+<li><strong>Local-first / offline-first.</strong> Production services load pre-staged model artifacts from a read-only host mount and talk only to approved internal services. Missing artifacts fail startup loudly — they never download at runtime. <code>HF_HUB_OFFLINE=1</code> and <code>TRANSFORMERS_OFFLINE=1</code> are baked into every image.</li>
+<li><strong>Multi-tenant by construction.</strong> Tenant context comes only from the validated JWT (the <code>group_id</code> claim, resolved to a tenant row), never from document content, tool arguments, or headers. Every catalog query is tenant-scoped; cross-tenant access returns 404.</li>
+<li><strong>Fail-closed everywhere.</strong> No partial visibility: inactive, deleting, failed, or unreviewed document versions are hard-filtered at the catalog layer and never returned as searchable.</li>
+<li><strong>Retrieved text is untrusted data.</strong> Responses carry provenance tags (document, filename, page range) and a trust marker; retrieved content can never alter identity, authorization, or instructions.</li>
+<li><strong>Approved artifacts only.</strong> Every model and dependency has a manifest (<code>services/artifacts/manifests/</code>) with a pinned upstream revision, sha256 checksums, and license. ModelScope, Chinese mirrors, and unapproved download endpoints are prohibited; see <a href="shared-artifact-policy.html">Artifact Policy</a>.</li>
+<li><strong>Quotas and review.</strong> Per-tenant ingest pages/day and query QPS quotas enforced at the gateway; pages the parser cannot confidently route land in a review queue for a human (reviewer role) to accept, re-route, or reject.</li>
+</ul>
+<h2 id="new_druid-vs-new_sage">new_DRUID vs New_sage</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>new_DRUID</th>
+<th>New_sage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Purpose</td>
+<td>Enterprise multi-tenant document knowledge</td>
+<td>Personal-use Context7 alternative (docs corpus)</td>
+</tr>
+<tr>
+<td>Auth</td>
+<td>Required — JWT gateway, roles, per-tenant isolation</td>
+<td>None (public-docs corpus)</td>
+</tr>
+<tr>
+<td>Corpus</td>
+<td>Tenant-private documents</td>
+<td>Public documentation</td>
+</tr>
+<tr>
+<td>Ingestion</td>
+<td>Full pipeline (pdftext → page router → olmOCR 2)</td>
+<td>Public doc crawling</td>
+</tr>
+<tr>
+<td>Access surfaces</td>
+<td>REST API, MCP (8 tools), web UI with admin views</td>
+<td>MCP only</td>
+</tr>
+<tr>
+<td>Compliance</td>
+<td>Quotas, review queue, deletion §12, backups, restore drills</td>
+<td>Not applicable</td>
+</tr>
+</tbody>
+</table>
+<p>They share infrastructure patterns (FastMCP, Milvus hybrid retrieval, MiniLM reranker, offline-first artifacts, single-H200 target), but they solve different problems: <strong>new_DRUID guards private enterprise documents; New_sage serves public documentation with no identity at all.</strong></p>
+<h2 id="where-to-go-next">Where to go next</h2>
+<ul>
+<li><a href="druid-architecture.html">Architecture &amp; services</a> — service map and data flow</li>
+<li><a href="druid-mcp-tools.html">MCP tools</a> — the 8 agent tools</li>
+<li><a href="druid-web-ui.html">Web UI</a> — the tenant UI guide</li>
+<li><a href="druid-api-reference.html">API reference</a> — document &amp; admin routes</li>
+<li><a href="druid-deployment.html">Deployment</a> — runbook, GPU arbitration, model staging</li>
+<li><a href="druid-operations.html">Operations</a> — backups, quotas, logging, job queue</li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a> — known failures and fixes</li>
+<li><a href="druid-configuration.html">Configuration</a> — every env var</li>
+</ul>
+</main>
+</body>
+</html>

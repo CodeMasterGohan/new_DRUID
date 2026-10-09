@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operations &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a class="active" aria-current="page" href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-operations">new_DRUID — Operations</h1>
+<h2 id="backup-restore">Backup &amp; restore</h2>
+<p>A single H200 is a single point of failure. Backups are load-bearing, and
+<strong>restore is tested on a schedule, not just documented.</strong></p>
+<h3 id="what-gets-backed-up">What gets backed up</h3>
+<table>
+<thead>
+<tr>
+<th>Store</th>
+<th>Tool</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Milvus</td>
+<td><code>milvus-backup</code></td>
+<td><code>project_knowledge_base_v*</code> collections + aliases</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td><code>pg_basebackup</code> + WAL archiving (or nightly <code>pg_dump</code>)</td>
+<td>Full catalog: tenants, documents, versions, jobs, review quarantine</td>
+</tr>
+<tr>
+<td>MinIO</td>
+<td><code>mc mirror</code> to a second MinIO / filesystem target</td>
+<td>Originals, page renders, parsed trees, markdown, provenance</td>
+</tr>
+</tbody>
+</table>
+<p>Back up the <strong>catalog and Milvus together</strong> (same window): the catalog's
+active-version pointers must be consistent with the indexed collections.
+A chunk without a catalog record is garbage; a catalog record without its
+chunks is a hole the hard filter will correctly hide — but restore should
+not rely on that.</p>
+<h3 id="schedule-initial">Schedule (initial)</h3>
+<ul>
+<li>Milvus: nightly <code>milvus-backup create</code>, retain 7 days.</li>
+<li>PostgreSQL: continuous WAL archiving + weekly base backup, retain 4 weeks.</li>
+<li>MinIO: continuous <code>mc mirror --watch</code>, plus nightly snapshot, retain 30 days.</li>
+</ul>
+<h3 id="restore-procedure">Restore procedure</h3>
+<ol>
+<li>Stop all services except the infrastructure (<code>postgres</code>, <code>minio</code>, <code>milvus</code>).</li>
+<li>Restore PostgreSQL from base backup + WAL to the backup timestamp T.</li>
+<li>Restore MinIO objects to T.</li>
+<li>Restore Milvus collections with <code>milvus-backup restore</code> to T.</li>
+<li>Run <code>milvus_setup</code> in <strong>verify mode</strong> (must confirm, not recreate):
+   the alias <code>project_knowledge_base</code> resolves and the collection schema
+   matches §9.</li>
+<li>Run the catalog/Milvus <strong>reconciliation check</strong>: every <code>READY</code>
+   document version must have its chunks present; every chunk's
+   <code>document_version</code> must resolve to an active catalog record.
+   Quarantine mismatches to <code>REVIEW_REQUIRED</code> — never silently expose them.</li>
+<li>Bring services up; run the §13 smoke queries (known-answer set from M1).</li>
+</ol>
+<h3 id="restore-testing">Restore testing</h3>
+<ul>
+<li>Full restore drill <strong>monthly</strong> to an isolated namespace/host.</li>
+<li>Pass/fail: the system must reach queryable state and pass the M1
+  known-answer spot checks.</li>
+<li>Record each drill (date, duration, issues) — a drill that isn't
+  recorded didn't happen.</li>
+</ul>
+<h3 id="rto-rpo-targets-initial-tune-after-first-drill">RTO / RPO targets (initial, tune after first drill)</h3>
+<ul>
+<li>RPO ≤ 24 h (nightly Milvus/PG backups; MinIO continuous).</li>
+<li>RTO ≤ 4 h for full restore on equivalent hardware.</li>
+</ul>
+<h3 id="deletion-interplay-12">Deletion interplay (§12)</h3>
+<p>Backups retain deleted data until retention expires. The tenant-facing
+retention policy must say this plainly: "deleted" means invisible to
+retrieval immediately (catalog hard filter), physically gone from live
+stores after compaction, and gone from backups after the retention window.</p>
+<h2 id="quotas">Quotas</h2>
+<p>Enforced at the gateway (spec §4); the MCP server does not duplicate
+enforcement.</p>
+<table>
+<thead>
+<tr>
+<th>Quota</th>
+<th>Default env</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ingest pages/day</td>
+<td><code>QUOTA_INGEST_PAGES_PER_DAY=1000</code></td>
+<td>Per-tenant daily page budget</td>
+</tr>
+<tr>
+<td>Query QPS</td>
+<td><code>QUOTA_QUERY_QPS=10</code></td>
+<td>Per-tenant sliding-window queries/sec</td>
+</tr>
+<tr>
+<td>Max upload size</td>
+<td><code>MAX_UPLOAD_MB=200</code></td>
+<td>→ 413 over cap</td>
+</tr>
+<tr>
+<td>Max pages/document</td>
+<td><code>MAX_PAGES_PER_DOCUMENT=2000</code></td>
+<td>→ 400 over cap</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Quota classification:</strong> <code>POST /v1/documents/upload</code> and MCP
+  <code>tools/call → ingest_document</code> consume ingestion quota (<code>page_count</code>
+  from query/form/arguments); everything else counts against query QPS.
+  Tool arguments influence only the quota class, never identity.</li>
+<li><strong>Storage:</strong> <code>RedisQuotaStore</code> (production) with atomic Lua scripts —
+  ingestion consumption rolls back on rejection so accounting stays
+  exact. <code>InMemoryQuotaStore</code> for tests/dev.</li>
+<li><strong>Redis keys:</strong> <code>druid:quota:ingest:{tenant}:{date}</code> (daily counter),
+  <code>druid:quota:query:{tenant}</code> (1-second sliding-window sorted set). The
+  document_api admin quotas page reads the same keys; they must stay in
+  sync with <code>gateway/quotas.py</code>.</li>
+<li><strong>Exhaustion:</strong> HTTP 429 with <code>Retry-After</code> (rounded up, min 1s).
+  Quota rejections are logged at INFO with group, quota kind, scope,
+  remaining, request_id, and path.</li>
+</ul>
+<h2 id="monitoring-logging">Monitoring &amp; logging</h2>
+<p>House style (audited 2026-10-09): <code>log = logging.getLogger(__name__)</code> per
+module, %-style format args, <code>INFO</code> / <code>WARNING</code> / <code>ERROR</code> / <code>DEBUG</code>,
+<code>logger.exception</code> in handlers. No bare <code>except:</code> and no
+<code>except ...: pass</code> remain anywhere in <code>services/</code>. Zero new dependencies
+(stdlib logging only).</p>
+<p>What gets logged, per service:</p>
+<ul>
+<li><strong>gateway</strong> — startup banner (upstreams, quota-store backend, quota
+  limits, JWT algs); auth failures → 401 at WARNING (no token contents);
+  quota rejections → 429 at INFO; upload 413/400 rejections at WARNING;
+  per-request forward INFO start/finish (method, path, upstream,
+  request_id, group, duration_ms); upstream timeout → 504, transport
+  error → 502 at WARNING; JWKS fetch failure at WARNING.</li>
+<li><strong>document_api</strong> — lifespan startup banner (queues, object-store
+  backend, bucket, upload limits — values, never secrets); error handlers
+  log 401/403/409 at WARNING, 404 at INFO; upload INFO start/finish
+  (filename, document_id, version_id, job_id, page_count, duration_ms),
+  validation/auth rejections at WARNING, enqueue failure at ERROR with
+  job_id; delete INFO start/finish + dedup-on-conflict at INFO; review
+  resolve INFO business event (item, decision, reviewed_by, group,
+  request_id); per-enqueue INFO in <code>enqueue_rq</code> (job_id, type, queue,
+  entrypoint).</li>
+<li><strong>catalog</strong> (library, no entrypoint) — <code>activate_version</code> INFO at start
+  and completion; every rejection path (quarantine, status, chunk-count,
+  missing baseline, deleted document) at WARNING; repository business
+  events (<code>create_job</code>, <code>soft_delete_document</code>, <code>quarantine_page</code>,
+  <code>resolve_quarantine_item</code>) at INFO with IDs + tenant context.</li>
+<li><strong>mcp_server</strong> — startup banner (JWT algs/issuer/audience,
+  origin-allowlist count, dev-fake-clients flag — never secrets); auth
+  middleware WARNING on origin rejection / missing-or-malformed auth /
+  bad token; INFO per-request finish (method, path, status,
+  duration_ms, group, request_id); the <code>_require</code> wrapper logs INFO tool
+  start/finish (tool name, user, group, request_id, duration_ms) and
+  <code>log.exception</code> on tool failure. stdio adapter logs to <strong>stderr</strong> —
+  stdout stays protocol-clean for the MCP transport.</li>
+<li><strong>ingestion</strong> — worker entry INFO (<code>run_ingestion_job</code> /
+  <code>run_deletion_job</code> with job_id); per-stage transitions in the pipeline;
+  olmOCR client: WARNING per-attempt on request failure and quality
+  rejection (page_index, attempt n/max, reason), WARNING when a page is
+  parked for review, INFO on accepted (attempts, latency).</li>
+<li><strong>embedding</strong> — startup banner; <code>/embed</code> and <code>/embed_image</code> INFO start
+  (counts, task / page_label) and finish (vector count, duration_ms);
+  400s at WARNING, 500s at ERROR, the 501 <code>object_key</code> branch at WARNING.</li>
+<li><strong>retrieval</strong> — <code>service.search()</code> INFO start (group, request_id,
+  query_chars) and finish (result count, duration_ms); INFO on
+  page-image reranker-bypass fallback and on catalog reconciliation
+  dropping mid-search deactivations; <code>main.wire()</code> startup banner
+  (embedding dim, candidate widths, neighbor expansion); invalid-JSON
+  400 at WARNING; catalog-port hard-filter failure at WARNING before
+  raising <code>DependencyError</code>.</li>
+<li><strong>milvus_setup</strong> — startup banner (uri, collection, alias, timeout,
+  argv); <code>delete_document</code> INFO start/finish (group, document, alias,
+  deleted count).</li>
+<li><strong>artifacts CLI</strong> — diagnostics to logging (stderr); the <code>OK:</code> /
+  <code>INVALID:</code> / <code>FAILED:</code> verdict lines stay on stdout as the CLI result
+  payload (Docker ENTRYPOINT contract).</li>
+</ul>
+<p>Secrets and token contents are never logged. Presigned artifact URLs are
+generated at read time, never logged.</p>
+<h2 id="job-queue">Job queue</h2>
+<ul>
+<li><strong>Broker:</strong> Redis (<code>REDIS_URL</code>), via <strong>RQ</strong> (<code>rq</code> chosen for
+  simplicity; swappable). Redis also serves as the quota store and cache.</li>
+<li><strong>Queues:</strong> <code>ingest</code> and <code>delete</code>.</li>
+<li><strong>Entry points</strong> (dotted strings resolved at worker time):
+  <code>services.ingestion.pipeline.run_ingestion_job</code>,
+  <code>services.ingestion.pipeline.run_deletion_job</code>.</li>
+<li><strong>Enqueue discipline:</strong> the document API creates the durable catalog
+  job row first, then enqueues via <code>enqueue_rq</code> with
+  <code>job_id=f"{queue}-{job.id}"</code> — <strong>commit-before-enqueue</strong>, so a worker
+  can never race the caller's uncommitted transaction. Enqueue failure
+  parks the job as <code>FAILED</code> (logged at ERROR with the job id).</li>
+<li><strong>Payloads:</strong> ingestion —
+  <code>{"queue", "pdf_key", "content_type", "page_count", ...}</code>;
+  deletion — <code>{"queue", "document_id"}</code>.</li>
+<li><strong>Workers:</strong> RQ workers run inside the scalable <code>ingestion</code> compose
+  service (<code>docker compose up -d --scale ingestion=4 ingestion</code>).
+  Ingestion workers rebuild the trusted <code>RequestContext</code> from the job's
+  persisted trusted fields and revalidate it fail-closed; the ingestion
+  state machine (PARSING → CHUNKING → EMBEDDING → INDEXING) commits per
+  stage, with failures → <code>RETRY_PENDING</code> / <code>FAILED</code> and attempt counting.</li>
+<li><strong>Deletion:</strong> catalog soft-delete → index sink → object prefix delete
+  → <code>DELETED</code>; the job is not <code>DELETED</code> until every store confirms.</li>
+</ul>
+</main>
+</body>
+</html>

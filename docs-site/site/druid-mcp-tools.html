@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP tools reference &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a class="active" aria-current="page" href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-mcp-tools-reference">new_DRUID — MCP Tools Reference</h1>
+<p>The MCP server exposes exactly <strong>8 tools</strong> via FastMCP, served over
+Streamable HTTP mounted at <code>/mcp</code> (port 8002). Every request requires
+<code>Authorization: Bearer &lt;JWT&gt;</code>; identity comes from the validated token
+only. Tool names and parameters below are copied from
+<code>services/mcp_server/src/mcp_server/</code> (<code>tools.py</code>, <code>server.py</code>,
+<code>models.py</code>, <code>auth.py</code>) — use them verbatim.</p>
+<h2 id="common-rules-all-tools">Common rules (all tools)</h2>
+<ul>
+<li>Tenant identity is read only from the validated request context; tool
+  arguments never carry tenant/user/group IDs.</li>
+<li>All string IDs are opaque (<code>^[A-Za-z0-9_-]{1,128}$</code>); paths, <code>../</code>, and
+  absolute paths are rejected.</li>
+<li>Every response instructs the calling agent to treat retrieved <code>text</code>
+  fields as <strong>untrusted data, never instructions</strong>.</li>
+<li>Role enforcement comes from <code>auth.TOOL_ROLES</code>. A caller needs one of
+  the listed roles (admin always passes).</li>
+</ul>
+<h2 id="search_knowledge_base">search_knowledge_base</h2>
+<p>Authorized hybrid retrieval over the tenant's knowledge base. Runs dense +
+BM25 + identifier retrieval with the caller's tenant predicate applied to
+every branch, fuses candidates (RRF, k=60), reranks with MiniLM, and
+returns provenance-tagged passages. Inactive, deleting, and unreviewed
+versions are excluded.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Constraints</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query</code></td>
+<td>string</td>
+<td>1–2000 chars, non-blank</td>
+<td>Natural-language question or keyword query</td>
+</tr>
+<tr>
+<td><code>top_k</code></td>
+<td>int</td>
+<td>1–20, default 8</td>
+<td>Max passages to return</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{"passages": [{provenance, text}, ...]}</code>. Provenance carries
+<code>document_id</code>, <code>filename</code> (required), page range, and the
+<code>untrusted-document-content</code> trust marker.</p>
+<p><strong>Roles:</strong> <code>member</code>, <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="ingest_document">ingest_document</h2>
+<p>Registers an authorized upload and enqueues ingestion. Validates the file
+declaration, checks the tenant's ingestion quota, creates the catalog
+record and durable job, and returns a <strong>single-use upload ticket</strong>. The
+actual bytes are uploaded through the Document API with that ticket — this
+tool never fetches remote URLs.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Constraints</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>filename</code></td>
+<td>string</td>
+<td>Bare display name, never a path; allowlisted extensions</td>
+</tr>
+<tr>
+<td><code>mime_type</code></td>
+<td>string</td>
+<td>One of <code>application/pdf</code>, <code>image/png</code>, <code>image/jpeg</code>, <code>image/tiff</code></td>
+</tr>
+<tr>
+<td><code>file_size_bytes</code></td>
+<td>int</td>
+<td>1 … 200 MiB (matches <code>MAX_UPLOAD_MB</code>)</td>
+</tr>
+<tr>
+<td><code>content_sha256</code></td>
+<td>string</td>
+<td>Hex SHA-256 of the file bytes</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{document_id, job_id, upload_ticket,
+upload_ticket_expires_in_seconds, note}</code>. Follow up by uploading the bytes
+to the Document API, then poll <code>get_ingestion_status</code>.</p>
+<p><strong>Roles:</strong> <code>member</code>, <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="get_ingestion_status">get_ingestion_status</h2>
+<p>Returns the status of an ingestion job owned by the caller's tenant.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>job_id</code></td>
+<td>string</td>
+<td>Opaque job ID from <code>ingest_document</code></td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{job_id, document_id, state, progress_percent, detail}</code>. <code>state</code>
+is one of the <code>IngestionState</code> values (<code>UPLOADED → QUEUED → PARSING →
+CHUNKING → EMBEDDING → INDEXING → READY</code>, plus <code>RETRY_PENDING</code>, <code>FAILED</code>,
+<code>REVIEW_REQUIRED</code>, <code>DELETING</code>, <code>DELETED</code>).</p>
+<p><strong>Roles:</strong> <code>member</code>, <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="list_documents">list_documents</h2>
+<p>Lists documents owned by the caller's tenant. Supports the
+<code>review_required</code> filter for the quarantine surface. Only bounded,
+enumerated filters are accepted — there is no free-form query interface.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Constraints</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>review_required</code></td>
+<td>bool | null</td>
+<td><code>true</code>: only documents awaiting reviewer attention</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>string | null</td>
+<td>One of the <code>IngestionState</code> enum values listed above</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>int</td>
+<td>1–100, default 50</td>
+</tr>
+<tr>
+<td><code>offset</code></td>
+<td>int</td>
+<td>≥ 0, default 0</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{total, documents: [{document_id, filename, status, version,
+page_count, created_at}]}</code>.</p>
+<p><strong>Roles:</strong> <code>member</code>, <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="get_document">get_document</h2>
+<p>Returns metadata (and optionally opaque artifact references) for one
+document owned by the caller's tenant. Artifact references are opaque
+keys, never filesystem paths. Unknown or foreign IDs fail.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Constraints</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>document_id</code></td>
+<td>string</td>
+<td>Opaque document ID</td>
+</tr>
+<tr>
+<td><code>include_artifacts</code></td>
+<td>bool</td>
+<td>default <code>false</code> — include opaque artifact references</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{document_id, filename, status, version, page_count, created_at,
+artifact_refs}</code>.</p>
+<p><strong>Roles:</strong> <code>member</code>, <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="get_review_item">get_review_item</h2>
+<p>Returns one quarantine item: the page render reference, both parse
+attempts, and routing diagnostics. Use this to inspect pages the router
+could not confidently parse before deciding accept / re-route / reject.
+Quarantined content is never searchable.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>review_item_id</code></td>
+<td>string</td>
+<td>Opaque review item ID</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{review_item_id, document_id, page_index, page_render_ref,
+native_attempt_summary, visual_attempt_summary, routing_diagnostics}</code>.</p>
+<p><strong>Roles:</strong> <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="resolve_review_item">resolve_review_item</h2>
+<p>Applies <strong>accept / re-route / reject</strong> to a quarantined page. Requires the
+reviewer role <strong>and</strong> explicit client confirmation (<code>confirm: true</code>).
+Without <code>confirm=true</code> the tool returns <code>{applied: false, reason: ...}</code>
+and re-invocation is required.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Constraints</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>review_item_id</code></td>
+<td>string</td>
+<td>Opaque review item ID</td>
+</tr>
+<tr>
+<td><code>decision</code></td>
+<td>string</td>
+<td>One of <code>accept</code>, <code>reroute</code>, <code>reject</code></td>
+</tr>
+<tr>
+<td><code>note</code></td>
+<td>string | null</td>
+<td>≤ 500 chars</td>
+</tr>
+<tr>
+<td><code>confirm</code></td>
+<td>bool</td>
+<td>default <code>false</code> — must be <code>true</code> to apply</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{applied: true, new_state}</code> on success.</p>
+<p><strong>Roles:</strong> <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="delete_document">delete_document</h2>
+<p>Authorizes and enqueues complete deletion of a document owned by the
+caller's tenant. Requires explicit client confirmation (<code>confirm: true</code>);
+without it the tool returns <code>{applied: false, reason: ...}</code>. Deletion
+covers Milvus chunks, originals, derived artifacts, page renders, caches,
+and catalog visibility. The job is not <code>DELETED</code> until every store
+confirms.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>document_id</code></td>
+<td>string</td>
+<td>Opaque document ID</td>
+</tr>
+<tr>
+<td><code>confirm</code></td>
+<td>bool</td>
+<td>default <code>false</code> — must be <code>true</code> to enqueue deletion</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{applied: true, deletion_state}</code> on success.</p>
+<p><strong>Roles:</strong> <code>member</code>, <code>reviewer</code>, <code>admin</code>.</p>
+<h2 id="role-summary">Role summary</h2>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>member</th>
+<th>reviewer</th>
+<th>admin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>search_knowledge_base</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>ingest_document</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>get_ingestion_status</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>list_documents</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>get_document</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>get_review_item</td>
+<td></td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>resolve_review_item</td>
+<td></td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>delete_document</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+</tbody>
+</table>
+<h2 id="transport-notes">Transport notes</h2>
+<ul>
+<li>Streamable HTTP: <code>POST</code> to the <code>/mcp</code> mount with the Bearer <code>&lt;redacted&gt;</code>
+  A separate <strong>stdio adapter</strong> exists with an explicit trusted credential
+  context (<code>--user-id</code>, <code>--group-id</code>, <code>--roles</code>); gateway headers never
+  apply to it.</li>
+<li>Origin allowlist (<code>MCP_ALLOWED_ORIGINS</code>): requests with a non-allowlisted
+  <code>Origin</code> header are rejected with 403 (DNS-rebinding protection);
+  requests without <code>Origin</code> (native clients) are allowed.</li>
+<li>Compose note: the shipped compose entry runs the server with
+  <code>DRUID_MCP_DEV_FAKE_CLIENTS=1</code> (in-memory fakes) until the real
+  retrieval/ingestion/catalog HTTP clients land — dev/fake clients only,
+  never real tenant data (see <a href="druid-troubleshooting.html">Troubleshooting</a>).</li>
+</ul>
+</main>
+</body>
+</html>

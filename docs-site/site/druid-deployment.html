@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment runbook &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a class="active" aria-current="page" href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-deployment-runbook">new_DRUID — Deployment Runbook</h1>
+<p>Target: one machine with an NVIDIA H200 (141 GB HBM3e). Docker Engine +
+Compose v2 + NVIDIA Container Toolkit. There are two compose projects;
+both attach to the shared external <code>druid-net</code> network.</p>
+<blockquote>
+<p><strong>Not yet run:</strong> bring-up, smoke tests, offline verification, quota
+burn-in, and the GPU arbitration check below are all documented in
+<code>docs/runbook.md</code> but have <strong>not been executed</strong> — they need the H200
+host. Model weights are not staged; dependency pins are initial
+lockfiles (regenerate with <code>pip-compile</code> before release).</p>
+</blockquote>
+<h2 id="bring-up-order">Bring-up order</h2>
+<pre><code class="language-bash">cp .env.example .env        # fill secrets; never commit a filled .env
+
+# 0. Shared network for cross-project DNS (ingestion workers -&gt; vLLM).
+#    Both compose projects attach to it as external. Create once per host.
+docker network create druid-net
+
+# 1. Infrastructure
+docker compose -f deploy/docker-compose.yml up -d postgres redis minio etcd milvus
+
+# 2. Schema + migrations (one-shot jobs, must exit 0)
+docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
+docker compose -f deploy/docker-compose.yml run --rm milvus_setup   # collections + indexes
+
+# 3. CPU services
+docker compose -f deploy/docker-compose.yml up -d gateway document_api mcp_server embedding retrieval
+docker compose -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
+
+# 4. GPU plane (H200 host only)
+docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
+</code></pre>
+<h2 id="compose-projects">Compose projects</h2>
+<table>
+<thead>
+<tr>
+<th>Project</th>
+<th>File</th>
+<th>Services</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>druid</code> (CPU)</td>
+<td><code>deploy/docker-compose.yml</code></td>
+<td>postgres, redis, minio, etcd, milvus, one-shot catalog + milvus_setup, gateway, document_api, mcp_server, web_ui, embedding, retrieval, ingestion (scalable)</td>
+<td>Container images are <code>python:3.11-slim</code> builds from each service dir</td>
+</tr>
+<tr>
+<td><code>druid-gpu</code></td>
+<td><code>deploy/docker-compose.gpu.yml</code></td>
+<td>vllm-olmocr</td>
+<td>nvidia device reservation, count 1</td>
+</tr>
+</tbody>
+</table>
+<p>Notable wiring (all verified by <code>tests/test_deploy_wiring.py</code>):</p>
+<ul>
+<li><code>druid-net</code> is declared <strong>external</strong> in both files and attached to
+  <code>ingestion</code> and <code>vllm-olmocr</code> so workers resolve <code>vllm-olmocr</code> by
+  service name.</li>
+<li>Gateway host port is <strong>8080</strong> (<code>GATEWAY_PORT</code>; container still listens
+  on 8000) because vLLM binds host port 8000 on the same machine.
+  Compose service names use underscores (<code>document_api</code>,
+  <code>mcp_server</code>) — gateway defaults were corrected to match.</li>
+<li><code>embedding</code> and <code>retrieval</code> mount <code>${MODEL_DIR:-/models}:/models:ro</code>
+  (read-only); <code>ingestion</code> mounts the same.</li>
+</ul>
+<h2 id="gpu-arbitration-2">GPU arbitration (§2)</h2>
+<p><strong>vLLM serving olmOCR is the ONLY GPU consumer.</strong> Embedding
+(EmbeddingGemma 2) and the MiniLM reranker run on CPU. Any additional GPU
+consumer requires re-validation of this policy.</p>
+<ul>
+<li>Checkpoint: <code>allenai/olmOCR-2-7B-1025-FP8</code> (FP8 is the approved
+  production checkpoint; the BF16 <code>olmOCR-2-7B-1025</code> is approved for
+  fine-tuning only).</li>
+<li>Launch: <code>--served-model-name olmocr-2-fp8 --gpu-memory-utilization 0.7
+  --max-model-len 8192 --limit-mm-per-prompt image=4</code>,
+  <code>HF_HUB_OFFLINE=1</code>, <code>TRANSFORMERS_OFFLINE=1</code>.</li>
+<li>HBM3e math (141 GB): FP8 weights ≈ 7 GB; vLLM reservation at 0.7 ≈
+  98.7 GB for weights + KV cache + activations; ≈ 42 GB deliberately
+  unallocated headroom.</li>
+<li><code>--gpu-memory-utilization 0.7</code> is the <strong>initial</strong> cap — tune against
+  KV-cache pressure under concurrent page renders. If OOM under burst,
+  the lever is <strong>ingestion concurrency</strong> (worker count, quotas), not
+  lowering the cap and not a second GPU consumer. Measure olmOCR
+  pages/hour <strong>while</strong> embedding/query services are under load (§13).</li>
+</ul>
+<h2 id="model-staging-artifact-manifests">Model staging (artifact manifests)</h2>
+<p>Before any service starts, the host registry at <code>$MODEL_DIR</code> (default
+<code>/models</code>) must contain the three approved checkpoints, each completed
+per its manifest in <code>services/artifacts/manifests/</code>:</p>
+<ul>
+<li><code>allenai/olmOCR-2-7B-1025-FP8</code></li>
+<li><code>google/embeddinggemma-2</code></li>
+<li><code>cross-encoder/ms-marco-MiniLM-L6-v2</code></li>
+</ul>
+<p>Manifests carry the pinned upstream revision, sha256 checksums, and
+license; <code>services/artifacts</code> provides <code>validate</code> / <code>verify</code> CLI
+commands. Manifests in <code>manifests/</code> were templates (zeroed sha256,
+unfilled revision); completed versions live in <code>manifests/completed/</code>.</p>
+<h2 id="offline-first-startup-behavior">Offline-first startup behavior</h2>
+<p>All images set <code>HF_HUB_OFFLINE=1</code> and <code>TRANSFORMERS_OFFLINE=1</code>. Missing
+artifacts <strong>fail startup loudly and name the artifact and expected mount
+path</strong> — they never download at runtime. Offline verification
+(<code>docs/runbook.md</code> §4): with external network blocked, every service
+must start cleanly and serve.</p>
+<h2 id="smoke-tests-post-bring-up">Smoke tests (post bring-up)</h2>
+<pre><code class="language-bash"># Gateway rejects unauthenticated requests
+curl -s -o /dev/null -w &quot;%{http_code}\n&quot; http://localhost:8000/healthz   # expect 401/403
+
+# Milvus collection exists with the alias
+# via milvus_setup logs or: utility.has_collection(&quot;project_knowledge_base_v1&quot;)
+
+# Embedding service loads the staged model read-only (no download)
+docker compose logs embedding | grep -i &quot;offline\|model loaded&quot;
+
+# vLLM serves the FP8 checkpoint
+curl http://localhost:8000/v1/models   # expect served-model-name olmocr-2-fp8
+</code></pre>
+<h2 id="host-sizing-from-runbook-1-record-dont-assume">Host sizing (from runbook §1 — record, don't assume)</h2>
+<ul>
+<li>Per text chunk ≈ <strong>8 KB</strong> host RAM (dense 768-dim float32 3.0 KB + HNSW
+  ~0.5–1.0 KB + BM25 ~1–2 KB + metadata ~2–4 KB); per page-image record
+  ≈ 4 KB.</li>
+<li>Worked example (5M chunks + 200K page images): Milvus ≈ 43 GB,
+  PostgreSQL ≈ 5 GB, MinIO sized from corpus × 2 headroom, vLLM host-side
+  ≈ 4 GB, OS page cache + headroom ≈ 16 GB → <strong>≥ 96 GB host RAM
+  (128 GB comfortable)</strong>. GPU memory is not part of this budget.</li>
+<li>Scaling rule of thumb: ~8 KB host RAM per text chunk (10M chunks ≈
+  80 GB Milvus-side). Beyond host RAM, the options are a bigger host,
+  Matryoshka truncation (after M1 validation), or sharding tenants
+  across hosts (out of v1 scope).</li>
+</ul>
+<h2 id="quota-burn-in-before-production-traffic">Quota burn-in (before production traffic)</h2>
+<ol>
+<li>Ingest a representative batch; measure pages/hour against the H200.</li>
+<li>Validate <code>QUOTA_INGEST_PAGES_PER_DAY=1000</code> is sustainable; adjust.</li>
+<li>Load-test query QPS against the retrieval service; validate
+   <code>QUOTA_QUERY_QPS=10</code>.</li>
+<li>Record measured numbers. Quotas are estimates until this is done.</li>
+</ol>
+</main>
+</body>
+</html>
