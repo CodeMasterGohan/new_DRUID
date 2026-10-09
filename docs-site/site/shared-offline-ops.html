@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline-first operations &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a class="active" aria-current="page" href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="shared-offline-first-operations">Shared offline-first operations</h1>
+<p>How new_DRUID and New_sage stay offline in production. Grounded in the
+Dockerfiles, <code>docker-compose*.yml</code>, and <code>.env.example</code> in each build tree.</p>
+<h2 id="environment-switches">Environment switches</h2>
+<p>Every service runs with these set (see <code>.env.example</code> and the vLLM olmOCR
+service in <code>docker-compose.gpu.yml</code>):</p>
+<pre><code class="language-bash">HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+</code></pre>
+<p>With both set, Hugging Face Hub and the transformers library never attempt a
+network fetch. Any code path that would download a model fails immediately
+instead of reaching out.</p>
+<h2 id="read-only-model-mounts">Read-only model mounts</h2>
+<p>The compose stacks mount the artifact registry read-only:</p>
+<ul>
+<li>new_DRUID: the host model tree (e.g. <code>$MODEL_DIR</code>) mounted read-only; the
+  FP8 olmOCR checkpoint must already be staged at
+  <code>$MODEL_DIR/allenai/olmOCR-2-7B-1025-FP8</code>.</li>
+<li>New_sage: the <code>/artifacts</code> volume mounted read-only, holding <code>models/</code>
+  (EmbeddingGemma 2, MiniLM) and <code>seed-corpus/</code> (DevDocs digest, MDN and
+  tldr-pages checkouts).</li>
+</ul>
+<p>Services load weights from the mount. Nothing writes to the registry at
+runtime — staging is a separate, operator-driven step.</p>
+<h2 id="staging-workflow">Staging workflow</h2>
+<ol>
+<li><strong>Validate manifest</strong> — the staging validator checks the source against
+   the allowlist, requires HTTPS, and requires an immutable revision pin
+   (see <a href="shared-artifact-policy.html">Artifact &amp; model policy</a>).</li>
+<li><strong>Verify checksums</strong> — sha256 of every file under the artifact root must
+   match the manifest before the artifact is accepted.</li>
+<li><strong>Mount</strong> — the registry is mounted read-only into the service
+   containers; <code>internal_location</code> in the manifest is the source of truth
+   for where the verifier looks.</li>
+</ol>
+<h2 id="missing-artifacts-fail-closed">Missing artifacts: fail closed</h2>
+<p>Startup assertions abort the service instead of downloading:</p>
+<ul>
+<li><strong>Embedding service</strong> — checksum verification under the EmbeddingGemma 2
+  root; any missing file or mismatch aborts startup.</li>
+<li><strong>Retrieval / reranker</strong> — same check for the MiniLM root.</li>
+<li><strong>Seed ingestion (New_sage)</strong> — verifies the MDN and tldr-pages checkouts
+  resolve to the pinned commit SHAs and the DevDocs digest matches; any
+  drift aborts the seed job before a single chunk is embedded.</li>
+<li><strong>vLLM olmOCR service (new_DRUID)</strong> — the FP8 checkpoint must already be
+  staged at the expected <code>$MODEL_DIR</code> path; without it, the service fails
+  to start.</li>
+</ul>
+<p>Production never downloads. If an artifact is missing or its checksums
+don't match, the service exits at startup — loudly, and before serving
+traffic.</p>
+</main>
+</body>
+</html>

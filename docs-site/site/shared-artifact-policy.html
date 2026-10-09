@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifact &amp; model policy &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a class="active" aria-current="page" href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="shared-artifact-model-policy">Shared artifact &amp; model policy</h1>
+<p>The offline-first model and artifact policy shared by new_DRUID and New_sage.
+Grounded in the specs and the artifact manifests at
+<code>services/artifacts/manifests/</code> in each build tree.</p>
+<h2 id="the-offline-first-rule">The offline-first rule</h2>
+<p>Production services load <strong>only</strong> pre-staged artifacts from the internal
+registry. They <strong>fail startup rather than downloading anything at runtime</strong>.
+There is no network fetch path in production — missing artifacts are a hard
+startup error, not a fetch.</p>
+<h2 id="artifact-manifests">Artifact manifests</h2>
+<p>Every approved artifact has one YAML manifest (one per model, plus
+New_sage's seed-corpus manifest). A manifest records:</p>
+<ul>
+<li><code>artifact_name</code> — e.g. <code>allenai/olmOCR-2-7B-1025-FP8</code></li>
+<li><code>upstream_source</code> — the canonical HTTPS origin (Hugging Face or ghcr.io)</li>
+<li><code>upstream_revision</code> — an <strong>immutable</strong> pin (commit hash / image digest).
+  Branch-style revisions (<code>main</code>, <code>master</code>, <code>latest</code>, <code>stable</code>, <code>dev</code>,
+  <code>develop</code>, <code>head</code>) are rejected.</li>
+<li><code>internal_location</code> — where the staged artifact lives on the box
+  (<code>/models/...</code> or <code>/artifacts/...</code>); this is the source of truth for the
+  verifier.</li>
+<li><code>license</code> — every approved model and dependency needs a recorded license.</li>
+<li><code>files</code> — per-file <code>sha256</code> checksums.</li>
+<li><code>approval_record</code> — the signed approval ID.</li>
+</ul>
+<p>Template entries (zeroed <code>sha256</code> values, <code>&lt;immutable-commit-hash&gt;</code>
+placeholders) are only acceptable during drafting. They must be completed
+during controlled staging before the manifest is approved.</p>
+<h2 id="approved-models">Approved models</h2>
+<p>Verified against the manifests in
+<code>new_druid/build/services/artifacts/manifests/</code> and
+<code>new_sage/build/services/artifacts/manifests/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Used by</th>
+<th>Purpose</th>
+<th>License</th>
+<th>Manifest / approval</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>allenai/olmOCR-2-7B-1025-FP8</code></td>
+<td>new_DRUID</td>
+<td>Visual PDF pages (vLLM on H200)</td>
+<td>Apache-2.0</td>
+<td><code>olmocr-2-7b-1025-fp8.yaml</code> · APPROVAL-2026-001</td>
+</tr>
+<tr>
+<td><code>google/embeddinggemma-2</code></td>
+<td>both</td>
+<td>Embeddings, text+image config</td>
+<td>Apache-2.0</td>
+<td><code>embeddinggemma-2-text-image.yaml</code> (DRUID) / <code>embeddinggemma-2.yaml</code> (SAGE) · APPROVAL-2026-002</td>
+</tr>
+<tr>
+<td><code>cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
+<td>both</td>
+<td>Reranker</td>
+<td>Apache-2.0</td>
+<td><code>minilm-l6-v2.yaml</code> · APPROVAL-2026-003</td>
+</tr>
+</tbody>
+</table>
+<p>New_sage additionally pins its seed corpus in <code>seed-corpus.yaml</code>: the
+DevDocs image digest, the MDN content git SHA, and the tldr-pages git SHA
+(seed-corpus pins signed under APPROVAL-2026-101). New_sage's two model
+manifests are byte-identical copies of new_DRUID's completed drafts, and the
+models may share one <code>/models</code> tree when the pins are identical.</p>
+<h2 id="prohibited-sources">Prohibited sources</h2>
+<p>Downloads from the following — or from any other unapproved endpoint — are
+prohibited:</p>
+<ul>
+<li><code>modelscope.cn</code> (and subdomains)</li>
+<li><code>hf-mirror.com</code>, <code>hf-mirror.aliyuncs.com</code></li>
+<li>any Chinese mirror repository</li>
+<li>any host not on the staging allowlist</li>
+</ul>
+<p><code>ghcr.io</code> is allowlisted <strong>only</strong> for the DevDocs image. The staging
+validator enforces this (<code>artifact_manifest.py</code>:
+<code>DEFAULT_PROHIBITED_HOST_PATTERNS</code>), rejecting prohibited hosts and
+non-HTTPS sources at manifest validation time.</p>
+<h2 id="staging-workflow-summary">Staging workflow (summary)</h2>
+<ol>
+<li><strong>Validate manifest</strong> — source allowlist, HTTPS scheme, immutable revision.</li>
+<li><strong>Verify checksums</strong> — every file's sha256 under the artifact root must
+   match the manifest.</li>
+<li><strong>Mount</strong> — the registry is mounted read-only into the service containers.</li>
+</ol>
+<p>Full details: <a href="shared-offline-ops.html">Offline-first operations</a>.</p>
+</main>
+</body>
+</html>

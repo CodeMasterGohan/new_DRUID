@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overview &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a class="active" aria-current="page" href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_sage-overview">New_sage Overview</h1>
+<h2 id="what-it-is">What it is</h2>
+<p>New_sage is a <strong>local-first Context7 alternative</strong>: a self-hosted documentation
+retrieval system that gives a coding assistant fresh, version-pinned library
+documentation over MCP, without sending queries to a third party and without
+relying on stale training-data cutoffs.</p>
+<p>The primary flow:</p>
+<pre><code>assistant: &quot;how do I do X with library L vN?&quot;
+  → resolve-library-id(&quot;L&quot;)            → canonical library record + known versions
+  → get-library-docs(id, version=N, topic=&quot;X&quot;)
+  → version-pinned doc passages with provenance (library, version, page URL, section)
+</code></pre>
+<h2 id="the-context7-trick-kept-and-extended">The Context7 trick, kept and extended</h2>
+<p>Context7's value is not a giant pre-indexed corpus: it resolves a library name
+to its canonical docs source, then fetches version-specific docs on demand.
+New_sage keeps that trick and adds what a hosted service cannot:</p>
+<ul>
+<li><strong>A persistent local versioned index.</strong> Every <code>(library, version)</code> is crawled
+  at most once and then served from the index indefinitely. Repeat queries
+  never re-crawl.</li>
+<li><strong>Hybrid retrieval instead of fetch-and-hope.</strong> Dense embeddings +
+  BM25 + exact identifier matching, fused with RRF and reranked with MiniLM.</li>
+<li><strong>Version pinning that survives re-crawls.</strong> Re-crawls insert new immutable
+  revision rows rather than mutating indexed rows, so anything already retrieved
+  stays reproducible.</li>
+</ul>
+<p>The MCP surface mirrors Context7's two tools exactly
+(<code>resolve-library-id</code>, <code>get-library-docs</code>), so a client already configured for
+Context7 can point at New_sage as a drop-in replacement. See
+<a href="sage-mcp-tools.html">sage-mcp-tools.html</a> for the full tool reference.</p>
+<h2 id="key-properties">Key properties</h2>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serving model</td>
+<td>FastMCP, Streamable HTTP, mounted at <code>/mcp</code></td>
+</tr>
+<tr>
+<td>Authentication</td>
+<td><strong>None.</strong> Single-user personal infrastructure; the host firewall / Tailscale interface is the security boundary. Do not expose it to the public internet.</td>
+</tr>
+<tr>
+<td>GPU requirement</td>
+<td><strong>None.</strong> EmbeddingGemma 2 and MiniLM are CPU-served. Runs on any spare box.</td>
+</tr>
+<tr>
+<td>Corpus</td>
+<td>Public documentation only (DevDocs docsets, MDN, tldr, versioned official docs, READMEs)</td>
+</tr>
+<tr>
+<td>Offline-first</td>
+<td>Every model and dependency ships with a manifest (pinned revision, sha256, license); services fail startup rather than download at runtime</td>
+</tr>
+<tr>
+<td>Deployment</td>
+<td>Single <code>docker compose</code> stack</td>
+</tr>
+<tr>
+<td>Retrieval</td>
+<td>Milvus hybrid: dense (768-dim EmbeddingGemma 2, HNSW) + server-side BM25 + identifier match → RRF → MiniLM rerank over top 50</td>
+</tr>
+<tr>
+<td>Chunking</td>
+<td>Heading-based, 420-token target with 48-token overlap; code blocks are never split</td>
+</tr>
+</tbody>
+</table>
+<h2 id="build-status">Build status</h2>
+<p>The build is complete and the full test suite is green (<strong>399 passed,
+2 skipped, 0 failed</strong> as of 2026-10-09). The following still need James's
+hardware or sign-off before the system can serve real traffic:</p>
+<ul>
+<li><strong>Model weights are not staged.</strong> The <code>model-artifacts</code> volume needs the
+  EmbeddingGemma 2 checkpoint and the MiniLM reranker + tokenizer copied in
+  before first boot (services fail startup otherwise — this is deliberate).</li>
+<li><strong>The seed corpus has not been ingested.</strong> DevDocs/MDN/tldr ingestion runs
+  against the deployment target.</li>
+<li><strong>Eval calibration is pending.</strong> The BM25 branch is measured
+  (recall@1 = 0.940 on a 50-question offline corpus); dense + rerank numbers
+  need the weights and live infra.</li>
+</ul>
+<h2 id="new_sage-vs-new_druid">New_sage vs new_DRUID</h2>
+<p>They share the same stack philosophy (offline-first artifacts, Milvus hybrid
+retrieval, Postgres catalog, MinIO snapshots), but they solve different problems:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>New_sage</th>
+<th>new_DRUID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Purpose</td>
+<td>Public library documentation for coding assistants</td>
+<td>Enterprise private-document knowledge system (RAG over PDFs)</td>
+</tr>
+<tr>
+<td>Corpus</td>
+<td>Public docs: HTML sites, docsets, READMEs</td>
+<td>Proprietary documents: PDFs via pdftext/olmOCR</td>
+</tr>
+<tr>
+<td>Auth / tenancy</td>
+<td>None — one user, one corpus</td>
+<td>JWT, tenants, ACLs, quotas</td>
+</tr>
+<tr>
+<td>GPU</td>
+<td>Not required</td>
+<td>Needed for olmOCR visual PDF parsing</td>
+</tr>
+<tr>
+<td>Ingestion input</td>
+<td>HTML/docs-sites, git checkouts</td>
+<td>PDFs</td>
+</tr>
+<tr>
+<td>MCP tools</td>
+<td><code>resolve-library-id</code>, <code>get-library-docs</code> (Context7-compatible)</td>
+<td>Document search/Q&amp;A tools</td>
+</tr>
+</tbody>
+</table>
+<p>Rule of thumb: if the question is "how do I use library X version N," that is
+New_sage. If the question is "what does this private document say," that is
+new_DRUID. See <a href="druid-overview.html">druid-overview.html</a> for the new_DRUID
+side.</p>
+</main>
+</body>
+</html>
