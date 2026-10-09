@@ -62,7 +62,7 @@ def test_milvus_setup_cmd_matches_module():
 
 def test_gateway_cmd_matches_module():
     dockerfile = read_dockerfile("gateway")
-    assert "main:app" in dockerfile
+    assert "app:app" in dockerfile
     assert os.path.exists(os.path.join(BUILD_ROOT, "services", "gateway", "app.py"))
 
 
@@ -156,3 +156,75 @@ def test_compose_env_vars_have_template_entries_or_defaults():
         if var not in env and not default:
             missing.append(var)
     assert not missing, f"compose vars without template entry or default: {missing}"
+
+
+def test_ingestion_image_preserves_services_tree_for_worker_entrypoints():
+    """The RQ worker must import the dotted-path entry points the document
+    API enqueues (services.ingestion.pipeline.run_ingestion_job /
+    run_deletion_job), so the ingestion image must carry the services tree
+    — not a flat copy of the ingestion sources."""
+    dockerfile = read_dockerfile("ingestion")
+    assert "/app/services/ingestion/" in dockerfile, (
+        "ingestion image must copy services/ingestion/ as a tree so "
+        "`services.ingestion.pipeline` is importable by the RQ worker")
+    assert "PYTHONPATH=/app" in dockerfile or "PYTHONPATH" in dockerfile, (
+        "ingestion image needs PYTHONPATH=/app for services.* imports")
+    assert os.path.exists(
+        os.path.join(BUILD_ROOT, "services", "ingestion", "pipeline.py"))
+    for entrypoint in ("services.ingestion.pipeline.run_ingestion_job",
+                       "services.ingestion.pipeline.run_deletion_job"):
+        module_path, _, _ = entrypoint.rpartition(".")
+        rel = os.path.join(BUILD_ROOT, *module_path.split(".")) + ".py"
+        assert os.path.exists(rel), f"worker entry point module missing: {rel}"
+
+
+def test_no_unexpanded_env_vars_in_exec_form_cmd():
+    """Docker does not expand ${VAR} in exec-form (JSON-array) CMD/RUN.
+    Any ${...} must appear only in shell-form instructions."""
+    for service in ("gateway", "document_api", "mcp_server", "catalog",
+                    "ingestion", "embedding", "retrieval", "milvus_setup"):
+        dockerfile = read_dockerfile(service)
+        for line in dockerfile.splitlines():
+            stripped = line.strip()
+            if re.match(r'^(CMD|ENTRYPOINT)\s*\[', stripped):
+                assert "${" not in stripped, (
+                    f"{service}: exec-form CMD/ENTRYPOINT contains "
+                    f"unexpanded ${{...}}: {stripped}")
+
+
+def test_dockerignore_keeps_dev_files_and_secrets_out_of_images():
+    """.venv/, __pycache__/, tests/ and .env must not ship in images —
+    document_api has a 90MB .venv that its Dockerfile would otherwise COPY."""
+    path = os.path.join(BUILD_ROOT, ".dockerignore")
+    assert os.path.exists(path), "build-root .dockerignore missing"
+    content = open(path).read()
+    for pattern in (".venv/", "__pycache__/", ".env"):
+        assert pattern in content, f".dockerignore missing {pattern}"
+
+
+def test_shared_network_for_ingestion_to_vllm():
+    """Ingestion workers call vLLM by its compose service name, but the CPU
+    and GPU planes are separate compose projects (separate default
+    networks). Both must attach to one shared external network, and the
+    olmocr client's default URL must name the actual gpu service."""
+    cpu = load_compose()
+    with open(os.path.join(BUILD_ROOT, "deploy", "docker-compose.gpu.yml")) as f:
+        gpu = yaml.safe_load(f)
+    for name, compose in (("cpu", cpu), ("gpu", gpu)):
+        nets = compose.get("networks", {})
+        assert "druid-net" in nets, f"{name} compose missing druid-net"
+        assert nets["druid-net"].get("external") is True, (
+            f"{name}: druid-net must be external (created once per host)")
+    assert "druid-net" in (cpu["services"]["ingestion"].get("networks") or []), (
+        "ingestion must attach to druid-net to reach vLLM")
+    assert "druid-net" in (gpu["services"]["vllm-olmocr"].get("networks") or []), (
+        "vllm-olmocr must attach to druid-net")
+    # The hostname the client dials must be the real compose service name.
+    client = open(os.path.join(
+        BUILD_ROOT, "services", "ingestion", "olmocr_client.py")).read()
+    assert "http://vllm-olmocr:8000" in client, (
+        "olmocr_client default URL must match the gpu compose service name")
+    assert "vllm-olmocr" in gpu["services"], "gpu service name changed?"
+    env = load_env_example()
+    assert env.get("OLMOCR_VLLM_URL", "").startswith("http://vllm-olmocr:"), (
+        ".env.example OLMOCR_VLLM_URL must point at the vllm-olmocr service")

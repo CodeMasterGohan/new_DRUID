@@ -44,6 +44,7 @@ def chunk(chunk_id, group_id, text, modality="text", parser="native-detected",
         "group_id": group_id,
         "document_id": "doc-1",
         "document_version": "v1",
+        "filename": "invoice-2026-001.pdf",
         "parent_id": None,
         "page_start": page_start,
         "page_end": page_end,
@@ -213,6 +214,7 @@ def test_results_render_with_provenance_and_trust_marker(corpus):
             provenance=mcp_models.PassageProvenance(
                 document_id=by_id[cid]["document_id"],
                 chunk_id=cid,
+                filename=by_id[cid]["filename"],
                 page_start=by_id[cid]["page_start"],
                 page_end=by_id[cid]["page_end"],
                 modality=by_id[cid]["metadata"]["modality"],
@@ -229,6 +231,7 @@ def test_results_render_with_provenance_and_trust_marker(corpus):
     rendered = result.render()
     assert 'trust="untrusted-document-content"' in rendered
     assert 'modality="page_image"' in rendered
+    assert 'filename="invoice-2026-001.pdf"' in rendered
     assert "<<<druid:passage" in rendered
     # The injected instruction is wrapped as data, never executed — it must
     # appear only inside the delimited passage body.

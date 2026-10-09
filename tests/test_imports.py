@@ -1,9 +1,9 @@
 """Every built service module must import cleanly.
 
-Services with no application code yet (document_api, embedding, ingestion,
-retrieval) are reported as skips — their builders own the code; the
-Dockerfile/requirements/compose wiring for them is verified in
-test_deploy_wiring.py.
+Covers all nine services (including document_api, embedding, ingestion,
+retrieval). Import paths mirror each service's Docker image layout:
+document_api modules import under their top-level names (its image copies
+the service flat to /app/), everything else as services.<svc>.*.
 """
 
 import importlib
@@ -37,10 +37,33 @@ SERVICE_MODULES = {
     "mcp_server.tools": "services/mcp_server/src/mcp_server/tools.py",
     "mcp_server.server": "services/mcp_server/src/mcp_server/server.py",
     "mcp_server.stdio_adapter": "services/mcp_server/src/mcp_server/stdio_adapter.py",
+    # document_api ships flat in its image (COPY services/document_api/ /app/,
+    # `uvicorn main:app`), so its modules are imported under their top-level
+    # names here — mirroring the image layout. (Build-root conftest.py puts
+    # services/document_api/ on sys.path.)
+    "main": "services/document_api/main.py",
+    "job_queue": "services/document_api/job_queue.py",
+    "internal_auth": "services/document_api/internal_auth.py",
+    "deps": "services/document_api/deps.py",
+    "storage": "services/document_api/storage.py",
+    "routes.documents": "services/document_api/routes/documents.py",
+    "routes.review": "services/document_api/routes/review.py",
+    # embedding (standalone CPU service)
+    "services.embedding.main": "services/embedding/main.py",
+    "services.embedding.service": "services/embedding/service.py",
+    "services.embedding.settings": "services/embedding/settings.py",
+    "services.embedding.reuse": "services/embedding/reuse.py",
+    # ingestion workers
+    "services.ingestion.pipeline": "services/ingestion/pipeline.py",
+    "services.ingestion.embeddings": "services/ingestion/embeddings.py",
+    "services.ingestion.config": "services/ingestion/config.py",
+    "services.ingestion.router": "services/ingestion/router.py",
+    "services.ingestion.chunker": "services/ingestion/chunker.py",
+    # retrieval service
+    "services.retrieval.main": "services/retrieval/main.py",
+    "services.retrieval.service": "services/retrieval/service.py",
+    "services.retrieval.config": "services/retrieval/config.py",
 }
-
-NOT_YET_BUILT = ("services.document_api", "services.embedding",
-                 "services.ingestion", "services.retrieval")
 
 
 @pytest.mark.parametrize("module", sorted(SERVICE_MODULES))
@@ -49,22 +72,3 @@ def test_service_module_imports(module):
     if not os.path.exists(os.path.join(BUILD_ROOT, rel)):
         pytest.skip(f"{rel} not present")
     importlib.import_module(module)
-
-
-@pytest.mark.parametrize("service", NOT_YET_BUILT)
-def test_service_code_not_yet_built(service):
-    """Placeholder: fails loudly if a service dir gains code without tests.
-
-    Sibling builders own document_api / embedding / ingestion / retrieval.
-    """
-    service_dir = os.path.join(BUILD_ROOT, service)
-    py_files = [
-        f for f in os.listdir(service_dir)
-        if f.endswith(".py") and f != "__init__.py"
-    ] if os.path.isdir(service_dir) else []
-    if py_files:
-        pytest.fail(
-            f"{service} now has code ({py_files}) — add import coverage to "
-            "test_imports.py SERVICE_MODULES"
-        )
-    pytest.skip(f"{service} application code not yet built (sibling scope)")
