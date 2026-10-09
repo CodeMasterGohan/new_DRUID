@@ -11,7 +11,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+    - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -19,11 +19,14 @@ services:
       retries: 10
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   redis:
     image: redis:7.4.2-alpine
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - redisdata:/data
+    - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -31,6 +34,9 @@ services:
       retries: 10
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   rustfs:
     # Replaces MinIO (community edition archived 2026). RustFS runs as
     # non-root UID 10001; the named volume is owned on first start.
@@ -40,10 +46,7 @@ services:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY}
     volumes:
-      - rustfsdata:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    - rustfsdata:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 10s
@@ -52,18 +55,24 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   etcd:
     image: quay.io/coreos/etcd:v3.5.16
     environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
+    - ETCD_AUTO_COMPACTION_MODE=revision
+    - ETCD_AUTO_COMPACTION_RETENTION=1000
+    - ETCD_QUOTA_BACKEND_BYTES=4294967296
+    - ETCD_SNAPSHOT_COUNT=50000
     volumes:
-      - etcddata:/etcd
+    - etcddata:/etcd
     command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   milvus:
     image: milvusdb/milvus:v2.5.6
     command: ["milvus", "run", "standalone"]
@@ -75,60 +84,65 @@ services:
       MINIO_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY}
       MINIO_USE_SSL: "false"
     volumes:
-      - milvusdata:/var/lib/milvus
-    ports:
-      - "19530:19530"
-      - "9091:9091"
+    - milvusdata:/var/lib/milvus
     depends_on:
-      - etcd
-      - rustfs
+    - etcd
+    - rustfs
     restart: unless-stopped
 
   # ── one-shot jobs ──────────────────────────────────────────────
+    networks:
+    - default
+    - cora
   catalog:
     build:
       context: ..
       dockerfile: services/catalog/Dockerfile
     env_file:
-      - ../.env
+    - ../.env
     depends_on:
       postgres:
         condition: service_healthy
 
+    networks:
+    - default
+    - cora
   milvus_setup:
     build:
       context: ..
       dockerfile: services/milvus_setup/Dockerfile
     env_file:
-      - ../.env
+    - ../.env
     environment:
       MILVUS_URI: http://milvus:19530
     depends_on:
-      - milvus
+    - milvus
     # Retries the Milvus connection internally until healthy, then exits.
 
   # ── long-running CPU services ──────────────────────────────────
+    networks:
+    - default
+    - cora
   gateway:
     build:
       context: ..
       dockerfile: services/gateway/Dockerfile
     env_file:
-      - ../.env
-    ports:
-      - "${GATEWAY_PORT:-8080}:8000"
+    - ../.env
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   document_api:
     build:
       context: ..
       dockerfile: services/document_api/Dockerfile
     env_file:
-      - ../.env
-    ports:
-      - "${DOCUMENT_API_PORT:-8001}:8001"
+    - ../.env
     depends_on:
       postgres:
         condition: service_healthy
@@ -136,72 +150,83 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   mcp_server:
     build:
       context: ..
       dockerfile: services/mcp_server/Dockerfile
     env_file:
-      - ../.env
+    - ../.env
     ports:
-      - "${MCP_PORT:-8002}:8002"
+    - "${MCP_PORT:-8002}:8002"
     depends_on:
-      - document_api
-      - retrieval
+    - document_api
+    - retrieval
     restart: unless-stopped
 
 
+    networks:
+    - default
+    - cora
   web_ui:
     build:
       context: ..
       dockerfile: services/web_ui/Dockerfile
     env_file:
-      - ../.env
+    - ../.env
     environment:
       # The UI talks to the gateway only (compose DNS); the browser reaches
       # the UI on the host-mapped port.
       GATEWAY_URL: "http://gateway:8000"
     ports:
-      - "${WEB_UI_PORT:-8005}:8005"
+    - "${WEB_UI_PORT:-8005}:8005"
     depends_on:
-      - gateway
+    - gateway
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   embedding:
     build:
       context: ..
       dockerfile: services/embedding/Dockerfile
     env_file:
-      - ../.env
-    ports:
-      - "${EMBEDDING_PORT:-8003}:8003"
+    - ../.env
     volumes:
       # Host artifact registry, READ-ONLY. Missing models fail startup.
-      - ${MODEL_DIR:-/models}:/models:ro
+    - ${MODEL_DIR:-/models}:/models:ro
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   retrieval:
     build:
       context: ..
       dockerfile: services/retrieval/Dockerfile
     env_file:
-      - ../.env
-    ports:
-      - "${RETRIEVAL_PORT:-8004}:8004"
+    - ../.env
     volumes:
-      - ${MODEL_DIR:-/models}:/models:ro
+    - ${MODEL_DIR:-/models}:/models:ro
     depends_on:
-      - milvus
-      - embedding
+    - milvus
+    - embedding
     restart: unless-stopped
 
+    networks:
+    - default
+    - cora
   ingestion:
     build:
       context: ..
       dockerfile: services/ingestion/Dockerfile
     env_file:
-      - ../.env
+    - ../.env
     volumes:
-      - ${MODEL_DIR:-/models}:/models:ro
+    - ${MODEL_DIR:-/models}:/models:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -211,7 +236,8 @@ services:
       # Shared with the gpu project so workers can reach vLLM by its
       # compose service name (vllm-olmocr). Create once:
       #   docker network create druid-net
-      - druid-net
+    - druid-net
+    - cora
     restart: unless-stopped
     # Scale CPU workers: docker compose up -d --scale ingestion=4
 
@@ -223,6 +249,9 @@ volumes:
   milvusdata:
 
 networks:
+  cora:
+    name: cora
+    external: true
   druid-net:
     name: druid-net
     external: true

@@ -80,14 +80,15 @@ docker compose -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
 
 # 4. GPU plane (H200 host only)
 docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
-curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
+docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
 ```
 
 ## 3. Smoke tests
 
 ```bash
-# Gateway rejects unauthenticated requests
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 401/403 without token
+# Gateway rejects unauthenticated requests (gateway port is internal-only;
+# reach it via the compose network)
+docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 401/403 without token
 
 # Milvus collection exists with the alias
 # (via milvus_setup logs or pymilvus: utility.has_collection("project_knowledge_base_v1"))

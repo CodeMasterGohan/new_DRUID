@@ -13,31 +13,29 @@ services:
     volumes:
       # Host artifact registry, READ-ONLY. The FP8 checkpoint must already be
       # staged at $MODEL_DIR/allenai/olmOCR-2-7B-1025-FP8 (see artifact manifest).
-      - ${MODEL_DIR:-/models}:/models:ro
-    ports:
-      - "${VLLM_PORT:-8000}:8000"
+    - ${MODEL_DIR:-/models}:/models:ro
     command:
-      - --model
-      - /models/allenai/olmOCR-2-7B-1025-FP8
-      - --served-model-name
-      - olmocr-2-fp8
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      - --gpu-memory-utilization
-      - ${VLLM_GPU_MEMORY_UTILIZATION:-0.7}
-      - --max-model-len
-      - ${VLLM_MAX_MODEL_LEN:-8192}
-      - --limit-mm-per-prompt
-      - image=4
+    - --model
+    - /models/allenai/olmOCR-2-7B-1025-FP8
+    - --served-model-name
+    - olmocr-2-fp8
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --gpu-memory-utilization
+    - ${VLLM_GPU_MEMORY_UTILIZATION:-0.7}
+    - --max-model-len
+    - ${VLLM_MAX_MODEL_LEN:-8192}
+    - --limit-mm-per-prompt
+    - image=4
     deploy:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -48,10 +46,14 @@ services:
       # Shared with the cpu project so ingestion workers resolve
       # `vllm-olmocr` by service name. Create once:
       #   docker network create druid-net
-      - druid-net
+    - druid-net
+    - cora
     restart: unless-stopped
 
 networks:
+  cora:
+    name: cora
+    external: true
   druid-net:
     name: druid-net
     external: true
