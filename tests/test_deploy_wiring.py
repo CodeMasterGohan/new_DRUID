@@ -320,3 +320,20 @@ def test_shared_network_for_ingestion_to_vllm():
     env = load_env_example()
     assert env.get("OLMOCR_VLLM_URL", "").startswith("http://vllm-olmocr:"), (
         ".env.example OLMOCR_VLLM_URL must point at the vllm-olmocr service")
+
+
+def test_only_allowlisted_services_publish_host_ports():
+    """James's rule (2026-10-09): no host port unless a client-side consumer
+    needs it. Only the web UI (browser) and the two MCP servers (his AI CLI)
+    publish; everything else is container-to-container on the compose/cora
+    networks."""
+    allowed = {
+        "druid-cpu": {"web_ui", "mcp_server"},
+        "druid-gpu": set(),
+        "sage": {"mcp-server"},
+    }
+    for label, compose, env in compose_files():
+        for service, port in effective_host_ports(compose, env):
+            assert service in allowed[label], (
+                f"{label}/{service} publishes host port {port} but is not "
+                f"in the allowlist {sorted(allowed[label])}")
