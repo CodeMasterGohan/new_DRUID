@@ -1146,3 +1146,14 @@ in job payload (treat as bearer secret in backups).
   table with Claude Code config, REST endpoint map, offline-first/artifact
   policy, repo layout, config table, test counts (349 passed / 4 skipped,
   web_ui 32/32), docs-site + skill links, H200-remaining status.
+
+## 2026-10-09 — Bind-mount volumes under /DATA/docker/mounts
+- All named volumes replaced with host bind mounts:
+  `/DATA/docker/mounts/{postgres,redis,rustfs,etcd,milvus}` (+ `models`,
+  `model-artifacts` for the read-only artifact registries). Top-level
+  `volumes:` blocks removed from both projects' CPU composes; GPU compose
+  updated to the new MODEL_DIR default. `.env.example` model paths updated.
+- Runbooks gained a host-directory prep section (pre-create dirs; chown
+  postgres UID 70, redis UID 999, rustfs UID 10001 — Docker creates missing
+  bind dirs as root). Docs site + skill updated; link check 378/378.
+- Deploy wiring suite: 18/18 passing.
