@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingestion &amp; freshness &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a class="active" aria-current="page" href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_sage-ingestion-freshness">New_sage Ingestion &amp; Freshness</h1>
+<p>Nothing is ever crawled per-query. Every <code>(library, version)</code> is ingested at
+most once, then served from the index indefinitely. Refresh happens only
+through the two automated paths below, plus stale-while-revalidate on read.</p>
+<h2 id="seed-corpus">Seed corpus</h2>
+<p>The initial corpus is ingested once from pinned local checkouts, through the
+same pipeline as crawls so chunking, embeddings, and provenance are uniform:</p>
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Content</th>
+<th>Ingest path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DevDocs docsets</td>
+<td>dozens of libraries, single-HTML docsets</td>
+<td>docset HTML → sections</td>
+</tr>
+<tr>
+<td>MDN content repo</td>
+<td>full web-platform docs</td>
+<td>Markdown in git</td>
+</tr>
+<tr>
+<td>tldr-pages</td>
+<td>CLI cheatsheets</td>
+<td>Markdown in git</td>
+</tr>
+<tr>
+<td>Versioned official docs</td>
+<td>PyTorch <code>site</code> branch, Python docs, etc.</td>
+<td>HTML → Markdown</td>
+</tr>
+<tr>
+<td>npm/PyPI READMEs</td>
+<td>long-tail packages</td>
+<td>Markdown</td>
+</tr>
+</tbody>
+</table>
+<p>The seed pins are recorded in <code>services/artifacts/manifests/seed-corpus.yaml</code>
+and were signed off by James (APPROVAL-2026-101, 2026-10-09): DevDocs ghcr
+image digest <code>sha256:8623d9b9…b3d66a60</code>, MDN content @ <code>fd0b11ad</code> (CC-BY-SA),
+tldr-pages @ <code>6bbd7cc4</code> (CC-BY-SA 4.0). The lookups that resolved these pins
+were metadata-only; no artifacts were downloaded.</p>
+<p><strong>Seed ingestion has not run yet</strong> — it targets James's H200 box.</p>
+<h2 id="devdocs-refresh-sync-not-crawl">DevDocs refresh: sync, not crawl</h2>
+<p>DevDocs-sourced libraries are <strong>never</strong> re-crawled from upstream sites. DevDocs
+publishes monthly images (<code>ghcr.io/freecodecamp/devdocs:latest</code>) with
+pre-scraped docsets, and refresh is a bulk sync job:</p>
+<ol>
+<li>Pull the monthly image (or build from the repo).</li>
+<li>Extract docsets; each carries a version stamp.</li>
+<li><strong>Diff</strong> versions against the catalog — re-ingest <strong>only</strong> docsets whose
+   version changed. Unchanged docsets are untouched: no re-chunk, no re-embed.</li>
+<li>DevDocs' own per-docset index (<code>db.json</code>) can be parsed to detect
+   per-page changes without any network fetching.</li>
+</ol>
+<p>Cost: one pull + diff per month, plus re-ingestion of only the changed
+libraries. No per-site crawling, no politeness budget spent.</p>
+<p>Implementation note: the diff (<code>devdocs_diff</code> in the crawler) is pure logic
+tested offline. The <code>docker pull</code> step is a clearly-marked production stub,
+and calling the sync without an explicit manifest raises
+<code>NotImplementedError</code> rather than pretending to sync — real DevDocs
+image-manifest parsing is an open gap, not a finished feature.</p>
+<h2 id="on-demand-crawler-at-most-once-per-library-version">On-demand crawler: at most once per (library, version)</h2>
+<p><code>get-library-docs</code> for an unknown or stale <code>(library, version)</code> enqueues a
+crawl job on the Redis <code>sage-crawl</code> queue instead of failing:</p>
+<ol>
+<li>The resolver maps the requested name → canonical library record.</li>
+<li>Version detection determines the docs URL for the requested version:
+   Sphinx <code>versions.json</code>, Docusaurus <code>versions.json</code> / version-dropdown
+   scrape, <code>/latest/</code> redirect resolution, or <code>git ls-remote --tags</code>.</li>
+<li>The crawler fetches the sitemap (one-level index recursion, same-origin +
+   base-path scope filter, 5000-URL safety cap), downloads pages politely,
+   and stores raw HTML snapshots in MinIO.</li>
+<li>Pipeline: trafilatura/readability → Markdown → heading chunking →
+   EmbeddingGemma 2 → Milvus upsert → catalog marks the version ready.</li>
+<li>The original query is then served from the fresh index.</li>
+</ol>
+<p><strong>Politeness rules</strong> (non-negotiable; this is personal-use infrastructure —
+don't get blocklisted): obey <code>robots.txt</code> (a disallow fails closed; a fetch
+failure of robots.txt itself fails open), 1 request/second per host,
+exponential backoff on 429/5xx (max 4 retries, honors <code>Retry-After</code>),
+identifiable user-agent <code>NewSageBot/1.0 (+personal research crawler; contact:
+local)</code>.</p>
+<h2 id="version-pinning-repo-clone-first-crawl-as-fallback">Version pinning: repo clone first, crawl as fallback</h2>
+<p>When a library record has a <code>repo_url</code>, version pinning does <strong>not</strong> use the
+website:</p>
+<ol>
+<li><code>git clone --branch &lt;tag&gt; --depth 1</code> — tags are the version, no
+   detection heuristics needed (exact, <code>v</code>-prefixed, or <code>v</code>-stripped tag
+   matching).</li>
+<li>Ingest <code>README.md</code> + <code>docs/**/*.md</code> (+ <code>CHANGELOG.md</code> for "what changed"
+   queries) directly as Markdown — no HTML extraction.</li>
+<li>Snapshot = the commit SHA (recorded on the catalog version row; repo
+   clones are reproducible from the tag, so no tarball is stored).</li>
+</ol>
+<p>Web crawling is the fallback for libraries whose docs live only on a website
+(Docusaurus/Sphinx sites with no docs in the repo). Cross-version dedup
+compares page <code>content_hash</code> against the previous ready version; unchanged
+pages are aliased, not re-chunked or re-embedded.</p>
+<h2 id="chunking-42048-code-never-split">Chunking: 420/48, code never split</h2>
+<p>Docs chunk by structure, not by page count:</p>
+<ul>
+<li>Split on H1/H2/H3 into sections; sections longer than ~420 tokens split
+  further on paragraph boundaries, with 48 tokens of prose overlap.</li>
+<li>Code blocks are never split mid-block. A section that is one large code
+  block stays whole; a single block over 2000 tokens is emitted whole with an
+  <code>oversized_code</code> flag.</li>
+<li>Every chunk records its <code>headings[]</code> breadcrumb (e.g.
+  <code>["API Reference", "Client", "connect()"]</code>) — rendered in provenance and
+  indexed for BM25.</li>
+<li>The chunker is tokenizer-aware via an injected <code>token_len</code> callable;
+  production wires the pre-staged MiniLM tokenizer
+  (<code>MINILM_TOKENIZER_PATH</code>, <code>local_files_only=True</code>) and fails closed when
+  the artifact is missing.</li>
+</ul>
+<p>A PDF fallback exists for projects that only publish PDF manuals: the
+new_DRUID pdftext path, CPU-only. It is off by default. (olmOCR is the GPU
+part of new_DRUID's PDF path and is <strong>not</strong> used here.)</p>
+<h2 id="bm25-is-server-side-only">BM25 is server-side only</h2>
+<p>The Milvus collection carries a server-side BM25 function (<code>text_to_bm25</code>:
+<code>text</code> → <code>sparse</code>, standard analyzer). The ingestion pipeline writes only
+the dense vector plus an augmented <code>text</code> field:</p>
+<pre><code>BM25 input text = chunk text + headings ×2 + code identifiers ×3
+</code></pre>
+<p>The local sparse-vector computation that ingestion briefly had was deleted
+(James's 2026-10-09 decision): ingestion inserts never include a <code>sparse</code>
+key, and the retrieval BM25 branch requires the Milvus function, failing
+closed without it. The chunk's raw <code>text</code> stays the embedding input;
+only the Milvus <code>text</code> field carries the augmentation, which means retrieved
+passages render the augmented text (headings/identifiers appended, repeated
+for BM25 weight).</p>
+<h2 id="immutable-library_version-revisions-alembic-0003">Immutable <code>library_version</code> revisions (Alembic 0003)</h2>
+<p>Re-crawls do <strong>not</strong> update version rows in place. They insert a new revision
+row; existing rows are never mutated:</p>
+<ul>
+<li>Schema: <code>library_version.revision</code> INTEGER NOT NULL DEFAULT 1 (existing
+  rows backfilled to 1); the unique constraint moved from
+  <code>UNIQUE(library_id, version)</code> to <code>UNIQUE(library_id, version, revision)</code>.</li>
+<li>Active-version rule: exactly one revision is active per
+  <code>(library, version)</code> — the newest READY row wins. An explicitly requested
+  version string always resolves to its active revision, else falls back to
+  <code>is_latest</code>. Retrieval filters <code>status='ready'</code> ordered by revision
+  descending.</li>
+<li>Each revision gets <strong>fresh page + chunk rows</strong> — no cross-revision aliasing
+  within the same version string, so every revision is self-contained and
+  independently prunable. (Cross-version dedup for <em>different</em> version
+  strings is unchanged.)</li>
+<li>The stale sweep only considers active revisions; superseded rows are never
+  re-crawled. After a successful re-crawl, the crawler deletes Milvus chunk
+  IDs present in the old revision but absent from the new one, running
+  post-READY so there is no serving gap (stale-while-revalidate preserved).</li>
+</ul>
+<h2 id="automated-refresh">Automated refresh</h2>
+<p>Two RQ job functions implement the §17.6 automation decision:</p>
+<ul>
+<li><strong><code>refresh_stale()</code></strong> — weekly sweep: <code>list_stale_versions()</code> (versions
+  where <code>crawled_at + refresh_after_days &lt; now</code>; default 30 days) → one crawl
+  job per stale version.</li>
+<li><strong><code>devdocs_sync()</code></strong> — monthly DevDocs image sync (diff, §"DevDocs
+  refresh" above).</li>
+</ul>
+<p><strong>Gap:</strong> the reviewed sources contain the job functions and the RQ workers
+that consume them, but <strong>no scheduler is wired into the compose stack</strong> — the
+crawler README says <code>refresh_stale</code> "runs on the compose scheduler," yet no
+scheduler service exists in <code>deploy/docker-compose.yml</code>. Until one is added
+(a host cron invoking the jobs, or an in-stack scheduler), these jobs must be
+triggered manually.</p>
+</main>
+</body>
+</html>

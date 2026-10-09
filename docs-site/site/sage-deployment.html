@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a class="active" aria-current="page" href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_sage-deployment">New_sage Deployment</h1>
+<h2 id="what-it-takes">What it takes</h2>
+<ul>
+<li>One machine. CPU-only, no GPU anywhere — EmbeddingGemma 2 and MiniLM are
+  CPU-served, and the PDF fallback is pdftext (olmOCR is not used).</li>
+<li>Docker + Docker Compose.</li>
+<li>The two model artifacts staged on the host before first boot
+  (EmbeddingGemma 2, MiniLM + tokenizer).</li>
+<li><strong>No authentication.</strong> All services speak plain HTTP on the <code>sage-net</code>
+  network. The host firewall / Tailscale interface is the security boundary —
+  do not publish these ports to the public internet.</li>
+</ul>
+<p>The target is James's H200 box, running alongside new_DRUID.</p>
+<h2 id="stack-layout">Stack layout</h2>
+<p>Defined in <code>deploy/docker-compose.yml</code>. Twelve compose services: the 9
+runtime services plus 2 one-shot jobs and 1 internal sidecar.</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Container port</th>
+<th>Default host port</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mcp-server</code></td>
+<td>8000</td>
+<td><code>MCP_HOST_PORT</code> → 8000</td>
+<td>FastMCP, binds <code>0.0.0.0:8000</code> in-container</td>
+</tr>
+<tr>
+<td><code>retrieval</code></td>
+<td>8001</td>
+<td><code>RETRIEVAL_HOST_PORT</code> → 8001</td>
+<td></td>
+</tr>
+<tr>
+<td><code>embedding</code></td>
+<td>8002</td>
+<td><code>EMBEDDING_HOST_PORT</code> → 8002</td>
+<td></td>
+</tr>
+<tr>
+<td><code>ingestion-worker</code></td>
+<td>—</td>
+<td>—</td>
+<td>RQ <code>sage-ingest</code>; scale with <code>--scale ingestion-worker=4</code></td>
+</tr>
+<tr>
+<td><code>crawler-worker</code></td>
+<td>—</td>
+<td>—</td>
+<td>RQ <code>sage-crawl</code></td>
+</tr>
+<tr>
+<td><code>milvus-standalone</code></td>
+<td>19530 / 9091</td>
+<td><code>MILVUS_HOST_PORT</code> / <code>MILVUS_MGMT_HOST_PORT</code></td>
+<td><code>milvusdb/milvus:latest</code> (CPU); shares MinIO bucket <code>sage-milvus</code></td>
+</tr>
+<tr>
+<td><code>minio</code></td>
+<td>9000 / 9001</td>
+<td><code>MINIO_HOST_PORT</code> / <code>MINIO_CONSOLE_HOST_PORT</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>postgres</code></td>
+<td>5432</td>
+<td><code>POSTGRES_HOST_PORT</code> → 5432</td>
+<td><code>postgres:16.6-alpine</code></td>
+</tr>
+<tr>
+<td><code>redis</code></td>
+<td>6379</td>
+<td><code>REDIS_HOST_PORT</code> → 6379</td>
+<td><code>redis:7.4.2-alpine</code>, AOF enabled</td>
+</tr>
+<tr>
+<td><code>etcd</code></td>
+<td>—</td>
+<td>—</td>
+<td>Internal only; required by Milvus 2.6.x standalone. Not part of the client port contract.</td>
+</tr>
+<tr>
+<td><code>catalog-migrate</code></td>
+<td>—</td>
+<td>—</td>
+<td>One-shot: Alembic migrations, then exits</td>
+</tr>
+<tr>
+<td><code>milvus_setup</code></td>
+<td>—</td>
+<td>—</td>
+<td>One-shot: provisions <code>sage_chunks</code> idempotently</td>
+</tr>
+</tbody>
+</table>
+<p>Named volumes: <code>pgdata</code>, <code>redisdata</code>, <code>miniodata</code>, <code>etcddata</code>, <code>milvusdata</code>,
+<code>model-artifacts</code>.</p>
+<p>The port contract is fixed on the container side. If new_DRUID runs on the
+same box (it publishes the same default host ports), remap the
+<code>${*_HOST_PORT}</code> variables in <code>.env</code> for one of the stacks — inter-service
+URLs use compose DNS names and fixed container ports, so they never need
+changing.</p>
+<h2 id="model-artifact-staging">Model artifact staging</h2>
+<p>Services are offline-first: they load pre-staged artifacts from the
+<code>model-artifacts</code> volume (read-only) and fail startup rather than downloading
+at runtime (<code>HF_HUB_OFFLINE=1</code>, <code>TRANSFORMERS_OFFLINE=1</code> are set in the
+stack). <strong>The build does not include the weights</strong> — stage them once before
+first boot:</p>
+<pre><code class="language-bash"># 1. create the volume (actual name: &lt;project&gt;_model-artifacts; check `docker volume ls`)
+docker volume create new_sage_model-artifacts
+
+# 2. copy the models in (volume mount path is /artifacts inside containers)
+docker run --rm \
+  -v &lt;volume-name&gt;:/artifacts \
+  -v /path/to/your/models:/src:ro \
+  alpine sh -c 'mkdir -p /artifacts/embeddinggemma-2 /artifacts/minilm &amp;&amp; \
+    cp -r /src/embeddinggemma-2/* /artifacts/embeddinggemma-2/ &amp;&amp; \
+    cp -r /src/minilm/* /artifacts/minilm/'
+</code></pre>
+<p>Expected volume layout:</p>
+<pre><code>/artifacts/
+  embeddinggemma-2/   # google/embeddinggemma-2 checkpoint, offline loadable
+  minilm/             # MiniLM reranker checkpoint + tokenizer
+</code></pre>
+<p>Each artifact ships with a manifest (pinned revision, sha256, license) in
+<code>services/artifacts/manifests/</code> (<code>embeddinggemma-2.yaml</code>, <code>minilm-l6-v2.yaml</code>);
+the validator CLI can verify staged artifacts against the manifests. See
+<a href="shared-artifact-policy.html">shared-artifact-policy.html</a> for the policy.</p>
+<h2 id="bring-up">Bring-up</h2>
+<p>From the build root (<code>~/workspace/new_sage/build/deploy</code>):</p>
+<pre><code class="language-bash"># 0. secrets + any host-port remapping (colocation with new_DRUID)
+cp .env.example .env &amp;&amp; $EDITOR .env
+
+# 1. base infrastructure
+docker compose up -d postgres redis minio etcd milvus-standalone
+
+# 2. create the sage_chunks collection + indexes (idempotent; safe to re-run)
+docker compose run --rm milvus_setup
+
+# 3. everything else
+docker compose up -d
+
+# 4. seed import — enqueue DevDocs/MDN/tldr import jobs on the redis queue
+#    consumed by ingestion-worker, writing to Milvus + catalog.
+</code></pre>
+<p>Verify:</p>
+<pre><code class="language-bash">docker compose run --rm milvus_setup python -m milvus_setup.create_collection --check-only
+curl http://localhost:8000/health   # mcp-server
+</code></pre>
+<p>Useful:</p>
+<pre><code class="language-bash">docker compose ps
+docker compose logs -f mcp-server retrieval embedding ingestion-worker
+docker compose up -d --scale ingestion-worker=4   # more CPU crawl workers
+</code></pre>
+<p>Data-loss command (drops <code>sage_chunks</code>):</p>
+<pre><code class="language-bash">docker compose run --rm milvus_setup python -m milvus_setup.create_collection --recreate --yes
+</code></pre>
+<h2 id="refresh-jobs">Refresh jobs</h2>
+<p>Two automated jobs are specified (§17.6 decision): a <strong>weekly</strong> stale-version
+sweep (<code>refresh_stale</code>) and a <strong>monthly</strong> DevDocs image sync (<code>devdocs_sync</code>).
+The job functions and their RQ workers exist in the build, but <strong>no
+scheduler is wired into the compose stack in the reviewed sources</strong> — the
+jobs must be triggered manually (or via a host cron) until scheduler wiring
+is added. Details and current status:
+<a href="sage-ingestion-freshness.html">sage-ingestion-freshness.html</a>.</p>
+<h2 id="mcp-client-wiring">MCP client wiring</h2>
+<p>Point any MCP client at the Streamable HTTP endpoint:</p>
+<pre><code>http://&lt;host&gt;:8000/mcp
+</code></pre>
+<p>There is no auth header, no token, no tenant concept. Restrict network access
+to localhost / the Tailscale interface instead.</p>
+<h2 id="current-limitations-as-of-the-2026-10-09-build">Current limitations (as of the 2026-10-09 build)</h2>
+<ul>
+<li>Model weights are <strong>not staged</strong> — required before anything can serve.</li>
+<li>Seed corpus ingestion has <strong>not run</strong> — requires the deployment target.</li>
+<li>Docker image builds were audited statically only; the build VM has no
+  Docker. Alembic migrations were exercised on SQLite, not real Postgres.</li>
+<li><code>pymilvus</code> is pinned inconsistently across images (2.4.6 in
+  ingestion/crawler vs 2.5.6 in retrieval/milvus_setup) — flagged for
+  unification at deploy time.</li>
+<li>DevDocs image-manifest parsing is a stub; the monthly sync needs an
+  explicit manifest or the parsing gap closed.</li>
+</ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture &amp; data flow &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a class="active" aria-current="page" href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_sage-architecture">New_sage Architecture</h1>
+<h2 id="system-layout">System layout</h2>
+<pre><code>                          ┌─────────────┐
+                          │  MCP client │  (coding assistant)
+                          └──────┬──────┘
+                                 │  Streamable HTTP, no auth
+                          ┌──────▼──────┐
+                          │ FastMCP     │  resolve-library-id
+                          │ server      │  get-library-docs
+                          └──────┬──────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              ▼                  ▼                  ▼
+       ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+       │ Retrieval   │    │ Catalog     │    │ Crawl queue │
+       │ service     │    │ (Postgres)  │    │ (Redis)     │
+       └──────┬──────┘    └─────────────┘    └──────┬──────┘
+              │                                    │
+              ▼                                    ▼
+       ┌─────────────┐                      ┌─────────────┐
+       │ Milvus      │                      │ Ingestion   │
+       │ hybrid      │                      │ workers     │
+       │ dense+BM25  │                      │ (trafilatura│
+       │ +identifier │                      │  → MD)      │
+       └─────────────┘                      └──────┬──────┘
+                                                   ▼
+                                            ┌─────────────┐
+                                            │ MinIO       │
+                                            │ raw snapshots│
+                                            └─────────────┘
+</code></pre>
+<h2 id="services">Services</h2>
+<p>The stack is defined in <code>deploy/docker-compose.yml</code> (all services on the
+<code>sage-net</code> network, plain HTTP, no auth). Container ports are the contract;
+host ports can be remapped for side-by-side operation with new_DRUID.</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Port</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mcp-server</code></td>
+<td>8000</td>
+<td>FastMCP server, mounts the Streamable HTTP app at <code>/mcp</code>. Exposes the two tools. Origin validation only (DNS-rebinding protection for browser clients); no auth.</td>
+</tr>
+<tr>
+<td><code>retrieval</code></td>
+<td>8001</td>
+<td><code>POST /retrieve</code> + <code>GET /health</code>. Version resolution, three-branch Milvus search, RRF fusion, MiniLM rerank, token-budget truncation.</td>
+</tr>
+<tr>
+<td><code>embedding</code></td>
+<td>8002</td>
+<td>CPU EmbeddingGemma 2 service: <code>POST /embed</code> (query-side), <code>POST /embed_documents</code> (doc-side), <code>GET /health</code>. Applies the PrefixContract prompt strings server-side.</td>
+</tr>
+<tr>
+<td><code>ingestion-worker</code></td>
+<td>—</td>
+<td>RQ worker on the <code>sage-ingest</code> queue: chunk → embed → Milvus upsert → catalog → version activation. Scalable (<code>--scale ingestion-worker=4</code>).</td>
+</tr>
+<tr>
+<td><code>crawler-worker</code></td>
+<td>—</td>
+<td>RQ worker on the <code>sage-crawl</code> queue: polite fetch, version detection, repo-clone pinning, MinIO snapshots.</td>
+</tr>
+<tr>
+<td><code>postgres</code></td>
+<td>5432</td>
+<td>Catalog: libraries, versions, pages, crawl jobs. Migrated by the <code>catalog-migrate</code> one-shot (Alembic).</td>
+</tr>
+<tr>
+<td><code>redis</code></td>
+<td>6379</td>
+<td>Crawl/ingest job queues + hot <code>get-library-docs</code> response cache.</td>
+</tr>
+<tr>
+<td><code>minio</code></td>
+<td>9000 / 9001</td>
+<td>Raw HTML snapshots and seed checkouts — the rebuild source if Milvus ever needs reconstructing.</td>
+</tr>
+<tr>
+<td><code>milvus-standalone</code></td>
+<td>19530 / 9091</td>
+<td><code>sage_chunks</code> collection; shares MinIO (bucket <code>sage-milvus</code>) for object storage. Needs the internal <code>etcd</code> sidecar (embedded etcd was removed in Milvus 2.6.x).</td>
+</tr>
+<tr>
+<td><code>catalog-migrate</code></td>
+<td>—</td>
+<td>One-shot: runs Alembic migrations, then exits.</td>
+</tr>
+<tr>
+<td><code>milvus_setup</code></td>
+<td>—</td>
+<td>One-shot: provisions the <code>sage_chunks</code> collection + indexes idempotently.</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>eval</code> and <code>artifacts</code> components are not runtime services: <code>eval</code> is an
+offline harness for the retrieval-quality gate, and <code>artifacts</code> holds the
+model/seed-corpus manifests and validator CLI.</p>
+<h2 id="how-a-query-flows">How a query flows</h2>
+<p>A <code>get-library-docs</code> call with a <code>topic</code> takes this path:</p>
+<ol>
+<li><strong>mcp-server</strong> validates arguments (pydantic) and resolves the
+   <code>library_id</code> against the resolver table (hand-written <code>libraries_seed.json</code>
+   in the build; a catalog-backed loader exists as the production path).</li>
+<li>It calls the retrieval service (<code>RETRIEVAL_URL</code>, default
+   <code>http://retrieval:8001</code>) with <code>library_id</code>, <code>version</code>, <code>topic</code>,
+   <code>top_k=50</code>, and the token budget.</li>
+<li><strong>retrieval</strong> resolves the version: exact version string → its version id;
+   unresolvable or omitted → the <code>is_latest</code> version, with
+   <code>version_fallback: true</code>.</li>
+<li>The query text is embedded by the <strong>embedding</strong> service using the
+   <code>web_search_query</code> PrefixContract prompt (byte-identical to new_DRUID's).</li>
+<li>Three Milvus branches run with <strong>one identical <code>(library_id, version_id)</code>
+   predicate</strong>:
+   - <strong>Dense:</strong> EmbeddingGemma 2 vectors, HNSW, cosine.
+   - <strong>BM25:</strong> server-side <code>text_to_bm25</code> function over the indexed <code>text</code>
+     field (chunk text + headings weighted ×2 + code identifiers weighted ×3).
+   - <strong>Identifier:</strong> exact/alias match on library name boosts all chunks of
+     the resolved library — this is why "react hooks useEffect" can never
+     return Vue docs no matter what dense retrieval thinks.</li>
+<li><strong>RRF fusion</strong> (<code>k=60</code>) over the three branches, identifier hits get a
+   fixed +1.0 boost, then <strong>MiniLM reranks the top 50</strong> on CPU.</li>
+<li>Finalists are truncated to the token budget (always keeping ≥1 passage),
+   and each passage is wrapped in explicit provenance delimiters:
+   <code>&lt;&lt;&lt;sage:passage library="..." version="..." is_latest="..."
+   url="..." section="..." trust="untrusted-document-content"&gt;&gt;&gt;</code>.</li>
+</ol>
+<p>With no <code>topic</code>, retrieval skips embedding and rerank and runs in overview
+mode: top chunks from pages whose heading breadcrumbs indicate
+getting-started/overview (fallback: lowest-<code>ordinal</code> chunks in the version).</p>
+<h2 id="the-milvus-sage_chunks-collection">The Milvus <code>sage_chunks</code> collection</h2>
+<p>Provisions by <code>milvus_setup</code> per the schema contract:</p>
+<pre><code>chunk_id    VARCHAR(64) PK
+library_id  VARCHAR(64)
+version_id  VARCHAR(64)
+dense       FLOAT_VECTOR(768)      ← HNSW index, COSINE metric
+sparse      SPARSE_FLOAT_VECTOR    ← generated by the text_to_bm25 function
+text        VARCHAR(65535)         ← analyzer enabled (standard tokenizer);
+                                    BM25 input: chunk text + headings ×2 + identifiers ×3
+headings    VARCHAR(4096)         ← JSON breadcrumb, e.g. [&quot;API Reference&quot;,&quot;Client&quot;,&quot;connect()&quot;]
+url         VARCHAR(2048)
+token_count INT64
+ordinal     INT64                 ← chunk order within page (overview-mode ordering)
+</code></pre>
+<p>The <code>sparse</code> field is <strong>never written by clients</strong>: the server-side BM25
+function generates it from <code>text</code>. Retrieval requires the function and fails
+closed without it (see <a href="sage-ingestion-freshness.html">sage-ingestion-freshness.html</a>).</p>
+<h2 id="catalog-postgres">Catalog (Postgres)</h2>
+<p>Five tables, Alembic-managed: <code>library</code> (canonical name, aliases, ecosystem,
+docs_url, repo_url), <code>library_version</code> (version string, revision, source,
+status, <code>crawled_at</code>, <code>is_latest</code>), <code>page</code> (URL, title, section path,
+<code>raw_snapshot_key</code>, content hash), <code>chunk</code> (page, ordinal, text, token count,
+headings), <code>crawl_job</code> (job kind/status for crawl and refresh work).</p>
+<p><code>library_version</code> is immutable once indexed: re-crawls insert new rows with a
+revision counter instead of updating rows in place. Details in
+<a href="sage-ingestion-freshness.html">sage-ingestion-freshness.html</a>.</p>
+<h2 id="data-not-instructions">Data-not-instructions</h2>
+<p>Every retrieved passage is untrusted third-party documentation. Tool
+descriptions instruct the calling agent to treat passage <code>text</code> strictly as
+data — never as instructions that could alter its identity, permissions, tool
+choices, or behavior — and the provenance delimiters carry
+<code>trust="untrusted-document-content"</code> so the boundary survives copy-paste.</p>
+</main>
+</body>
+</html>

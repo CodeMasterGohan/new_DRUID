@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Web UI user guide &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a class="active" aria-current="page" href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="new_druid-web-ui-user-guide">new_DRUID — Web UI User Guide</h1>
+<p>A thin human layer over the gateway/document_api: FastAPI + Jinja2
+server-rendered templates + <strong>htmx 2.0.4 vendored</strong> in the image (no CDN,
+per the offline network policy). The UI talks <strong>only</strong> to the gateway
+with your own Bearer <code>&lt;redacted&gt;</code> — no direct Postgres, Milvus, or MinIO
+access. Tenant scoping is enforced downstream; the UI adds no new data
+paths.</p>
+<ul>
+<li><strong>Port:</strong> 8005 (host mapping; container listens on 8005).</li>
+<li><strong>Theme:</strong> dark mode is the default; light applies only when the OS
+  explicitly prefers it (<code>prefers-color-scheme: light</code>).</li>
+</ul>
+<h2 id="logging-in">Logging in</h2>
+<p>There is <strong>no credential store</strong> in new_DRUID. Access tokens are
+provisioned out-of-band by the operator: JWTs (HS256 shared secret, or
+RS256 via JWKS) carrying <code>sub</code> (user id), <code>group_id</code> (tenant), and
+<code>roles</code> (list of strings) claims, using the same <code>JWT_*</code> settings as the
+gateway.</p>
+<ol>
+<li>Open the UI and paste your provisioned JWT into the login page.</li>
+<li>The server validates signature, issuer, audience, and expiry using the
+   gateway's exact auth contract, then stores the token in an
+   <code>HttpOnly</code>/<code>Secure</code>/<code>SameSite=Lax</code> cookie.</li>
+<li>Identity comes from the validated token <strong>only</strong>. Spoofable headers
+   (<code>X-Group-Id</code>, <code>X-Druid-*</code>) are stripped; query params and form fields
+   are never consulted for identity. Fail closed.</li>
+<li>Log out with the logout button (<code>POST /logout</code>), which clears the
+   cookie.</li>
+</ol>
+<h3 id="roles">Roles</h3>
+<p>Roles come from the token's <code>roles</code> claim — nothing else.</p>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>What it unlocks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user</code></td>
+<td>Every page, scoped to your own tenancy</td>
+</tr>
+<tr>
+<td><code>reviewer</code></td>
+<td>Review actions (accept / re-route / reject); <code>admin</code> always can</td>
+</tr>
+<tr>
+<td><code>admin</code></td>
+<td>Operator views (all tenants: documents, jobs, quotas)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The <code>admin</code> role is never grantable through the UI</strong> — it is assigned
+out-of-band at account provisioning (in production, this is James as the
+box operator). Non-admins get 403 on all admin views.</p>
+<h2 id="pages">Pages</h2>
+<h3 id="upload-upload">Upload — <code>/upload</code></h3>
+<p>Drag-and-drop upload with <strong>chunked, resumable</strong> large-file support:</p>
+<ul>
+<li>The browser splits the file into chunks (<code>upload_chunk_mb</code>, default
+  8 MB) and POSTs them to <code>/upload/session/{id}/chunk</code>. Resume works by
+  re-querying which chunk indexes were already received.</li>
+<li>On <code>complete</code>, the UI assembles the bytes and forwards <strong>one</strong> multipart
+  upload to the gateway (<code>POST /v1/documents/upload</code>). Authoritative
+  size and quota limits are enforced at the gateway/document_api, not by
+  the browser.</li>
+<li>Upload sessions are in-process with a TTL — correct for the
+  single-replica compose deployment.</li>
+</ul>
+<h3 id="documents-documents">Documents — <code>/documents</code></h3>
+<p>Table of your tenant's documents: filename, active version, ingestion
+state, page count, updated timestamp. Details and actions:</p>
+<ul>
+<li><strong>Detail view</strong> (<code>/documents/{document_id}</code>): enriched with the active
+  version's status/page count and full <strong>version history</strong>.</li>
+<li><strong>Delete</strong> (with confirmation): enqueues the §12 deletion (Milvus
+  chunks, originals, artifacts, renders, catalog visibility); the job
+  reports as already-queued if retried.</li>
+<li>The table refreshes via htmx partials (<code>/partials/documents/rows</code>;
+  ~15-second polling).</li>
+</ul>
+<h3 id="review-queue-review">Review queue — <code>/review</code></h3>
+<p>Lists <code>REVIEW_REQUIRED</code> items (mirrors the
+<code>list_documents?review_required</code> filter). The detail view
+(<code>/review/{item_id}</code>) shows the page render, both parse attempts, and
+routing diagnostics — mirrors the <code>get_review_item</code> MCP tool.</p>
+<p>Actions (require the <strong>reviewer</strong> role; backend enforces it again):</p>
+<ul>
+<li><strong>accept</strong> — the parsed page stands.</li>
+<li><strong>re-route</strong> — send the page to the other parse path.</li>
+<li><strong>reject</strong> — drop the page.</li>
+</ul>
+<p>Non-reviewers see the queue read-only. Quarantined content is never
+searchable.</p>
+<h3 id="quarantine-quarantine">Quarantine — <code>/quarantine</code></h3>
+<p>Documents whose active version is <code>FAILED</code>, with diagnostics. The UI
+points you back to the upload path: retry is <strong>re-upload</strong> (idempotent on
+content checksum) rather than in-place re-enqueue.</p>
+<blockquote>
+<p>Spec §16 described a retry action here; the built behavior is a
+"Re-upload" button that returns to <code>/upload</code>.</p>
+</blockquote>
+<h3 id="search-search">Search — <code>/search</code></h3>
+<p>A query box over your tenant's corpus. The UI calls <code>POST /mcp</code> with
+<code>tools/call → search_knowledge_base</code> and renders the results as
+<strong>provenance-tagged passages</strong> (filename + page range, per the §10
+provenance contract). Top-k is adjustable (1–20, default 8).</p>
+<h3 id="admin-views-admin-role-only">Admin views (admin role only)</h3>
+<ul>
+<li><strong>All documents</strong> — <code>/admin/documents</code>: cross-tenant document table
+  with a tenant filter and a latest-version <code>status</code> filter; same actions
+  as the tenant view, plus a tenant column.</li>
+<li><strong>Jobs</strong> — <code>/admin/jobs</code>: ingestion/deletion job list across tenants:
+  job_id, group_id, job_type, state, attempt_count, error excerpt
+  (truncated to 500 chars), document_id, created_at, updated_at,
+  computed <code>duration_seconds</code>. Note: there is <strong>no <code>progress</code> field</strong> —
+  the <code>jobs</code> table has no progress column; <code>state</code> + <code>attempt_count</code> are
+  the progress signal.</li>
+<li><strong>Quotas</strong> — <code>/admin/quotas</code>: per-tenant quota usage (ingest pages/day,
+  query QPS). Usage is read from the gateway's Redis counters
+  (<code>druid:quota:ingest:{tenant}:{date}</code>,
+  <code>druid:quota:query:{tenant}</code>); limits mirror the gateway's
+  <code>QUOTA_INGEST_PAGES_PER_DAY</code> / <code>QUOTA_QUERY_QPS</code>. If Redis is
+  unreachable, usage is reported as <strong>null</strong>, not zero.</li>
+</ul>
+<p>If the document_api admin endpoints are ever missing, the pages degrade
+gracefully with an explanatory notice; against the current build the
+contract is implemented (2026-10-09).</p>
+<h2 id="what-the-ui-deliberately-does-not-do">What the UI deliberately does not do</h2>
+<ul>
+<li>No document editing or annotation — it manages documents, it is not an
+  editor.</li>
+<li>No new background jobs — all async work flows through the existing
+  Redis ingestion queue; the UI polls job-status endpoints.</li>
+<li>The UI never accepts a tenant/user identifier from the client; the
+  two-tenant test (tenant A cannot reach tenant B's documents, jobs, or
+  passages) is an explicit acceptance gate.</li>
+</ul>
+<p><strong>Build status:</strong> 32/32 UI tests pass, including tenant-isolation
+proofs (spoofed headers ignored, cross-tenant 403s) and a chunked-upload
+round-trip with out-of-order resume and byte-identical assembly.</p>
+<blockquote>
+<p>One deviation from spec §16 worth knowing: the spec put the UI on
+internal port 8003; the build uses <strong>8005</strong> (8003 is the embedding
+service, 8004 the retrieval service). The spec's "login exchanges
+credentials for a token" flow became token-paste, because no credential
+store exists in new_DRUID.</p>
+</blockquote>
+</main>
+</body>
+</html>

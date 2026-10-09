@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home &middot; DRUID &amp; SAGE docs</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar" aria-label="Documentation">
+<div class="brand"><a href="index.html">DRUID &amp; SAGE</a><span class="brand-sub">docs</span></div>
+<a class="home-link active" aria-current="page" href="index.html">Home</a>
+<section class="nav-group">
+<h2>New_sage</h2>
+<ul>
+<li><a href="sage-overview.html">Overview</a></li>
+<li><a href="sage-architecture.html">Architecture &amp; data flow</a></li>
+<li><a href="sage-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="sage-ingestion-freshness.html">Ingestion &amp; freshness</a></li>
+<li><a href="sage-deployment.html">Deployment</a></li>
+<li><a href="sage-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>new_DRUID</h2>
+<ul>
+<li><a href="druid-overview.html">Overview</a></li>
+<li><a href="druid-architecture.html">Architecture &amp; services map</a></li>
+<li><a href="druid-mcp-tools.html">MCP tools reference</a></li>
+<li><a href="druid-web-ui.html">Web UI user guide</a></li>
+<li><a href="druid-api-reference.html">Document &amp; Admin API reference</a></li>
+<li><a href="druid-deployment.html">Deployment runbook</a></li>
+<li><a href="druid-operations.html">Operations</a></li>
+<li><a href="druid-troubleshooting.html">Troubleshooting</a></li>
+<li><a href="druid-configuration.html">Configuration reference</a></li>
+</ul>
+</section>
+<section class="nav-group">
+<h2>Shared</h2>
+<ul>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a></li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a></li>
+</ul>
+</section>
+</nav>
+<main class="content" id="content">
+<h1 id="druid-sage-documentation">DRUID &amp; SAGE documentation</h1>
+<p>Two sibling systems on one retrieval stack. <strong>New_sage</strong> is a personal
+Context7 alternative: fast retrieval over <em>public</em> library documentation —
+no login, no auth. <strong>new_DRUID</strong> is a self-hosted enterprise RAG + MCP
+knowledge system over <em>your own</em> documents, running on a single NVIDIA H200.</p>
+<h2 id="when-to-use-which">When to use which</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>New_sage</th>
+<th>new_DRUID</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Purpose</td>
+<td>Personal Context7 alternative — pull public library docs into coding sessions</td>
+<td>Enterprise local-first RAG + MCP over your own documents</td>
+</tr>
+<tr>
+<td>Corpus</td>
+<td>Public docs: DevDocs image, MDN, tldr-pages seed; on-demand crawler for the rest</td>
+<td>Your documents: native PDF parsing via pdftext, visual pages via olmOCR 2, table detection</td>
+</tr>
+<tr>
+<td>Authentication</td>
+<td>None — public corpus only</td>
+<td>GitHub OAuth + JWT; <code>admin</code> role with cross-tenant operator views</td>
+</tr>
+<tr>
+<td>Retrieval</td>
+<td>Milvus hybrid dense+BM25 · EmbeddingGemma 2 · MiniLM reranker</td>
+<td>Same retrieval stack (RRF + MiniLM)</td>
+</tr>
+<tr>
+<td>Interface</td>
+<td>MCP server (8 tools)</td>
+<td>MCP server + web UI (Upload, Documents, Review queue, Quarantine, Search)</td>
+</tr>
+<tr>
+<td>Deployment target</td>
+<td>Same H200 box, alongside new_DRUID</td>
+<td>Single H200, Docker Compose, offline-first artifacts</td>
+</tr>
+</tbody>
+</table>
+<h2 id="quickstart">Quickstart</h2>
+<ul>
+<li><a href="sage-overview.html">New_sage overview</a> — what it does, the MCP tools, and the public-docs corpus</li>
+<li><a href="druid-overview.html">new_DRUID overview</a> — what it does, the web UI, and the document pipeline</li>
+<li><a href="shared-artifact-policy.html">Artifact &amp; model policy</a> — offline-first rules, manifests, approved models</li>
+<li><a href="shared-offline-ops.html">Offline-first operations</a> — env switches, read-only mounts, staging workflow</li>
+<li><a href="sage-deployment.html">New_sage deployment</a> — staging artifacts and standing up the box</li>
+<li><a href="druid-deployment.html">new_DRUID deployment runbook</a> — the single-H200 compose deployment</li>
+</ul>
+</main>
+</body>
+</html>
