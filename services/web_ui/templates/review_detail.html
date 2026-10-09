@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Review item — DRUID{% endblock %}
+{% block content %}
+<h1>Review item <code>{{ item.item_id[:8] }}…</code></h1>
+<p class="muted">Document <a href="/documents/{{ item.document_id }}"><code>{{ item.document_id[:8] }}…</code></a>
+  · page {{ item.page_index }} · status <strong>{{ item.status }}</strong></p>
+
+{% if item.page_render_url %}
+<h2>Page render</h2>
+<img src="{{ item.page_render_url }}" alt="page render" class="render">
+{% endif %}
+
+<h2>Parse attempts</h2>
+<pre>{{ item.parse_attempts | tojson(indent=2) }}</pre>
+
+<h2>Routing diagnostics</h2>
+<pre>{{ item.routing_diagnostics | tojson(indent=2) }}</pre>
+
+{% if item.status == "pending" and can_review %}
+<h2>Resolve</h2>
+<form method="post" action="/review/{{ item.item_id }}/resolve">
+  <label>Decision
+    <select name="decision" required>
+      <option value="accepted">Accept — parse as-is</option>
+      <option value="re-routed">Re-route — send to the other parser</option>
+      <option value="rejected">Reject — drop this page</option>
+    </select>
+  </label>
+  <label>Note (optional)
+    <input type="text" name="detail" maxlength="500">
+  </label>
+  <button type="submit">Resolve</button>
+</form>
+{% elif item.status == "pending" %}
+<p class="muted">Resolving requires the reviewer role.</p>
+{% else %}
+<p class="muted">Reviewed by {{ item.reviewed_by or '—' }} at {{ item.reviewed_at or '—' }}.</p>
+{% endif %}
+<p><a href="/review">← back to review queue</a></p>
+{% endblock %}

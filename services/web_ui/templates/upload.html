@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Upload — DRUID{% endblock %}
+{% block content %}
+<h1>Upload documents</h1>
+<p class="muted">Tenant <strong>{{ identity.group_id }}</strong> ·
+  quota {{ quota_pages_per_day }} ingestion pages/day ·
+  max {{ max_upload_mb }} MB per file. Files are chunked in the browser
+  ({{ chunk_mb }} MB each) and resume automatically if the connection drops.</p>
+
+<div id="dropzone" class="dropzone">
+  <p>Drag &amp; drop files here, or <button type="button" id="browse">browse</button></p>
+  <p class="muted">PDF, PNG, JPEG, WebP, TIFF</p>
+  <input type="file" id="fileinput" multiple hidden
+         accept=".pdf,.png,.jpg,.jpeg,.webp,.tiff,.tif">
+</div>
+<ul id="uploads"></ul>
+
+<script>
+(function () {
+  var CHUNK = {{ chunk_mb }} * 1024 * 1024;
+  var dropzone = document.getElementById('dropzone');
+  var fileinput = document.getElementById('fileinput');
+  var list = document.getElementById('uploads');
+
+  document.getElementById('browse').addEventListener('click', function () {
+    fileinput.click();
+  });
+  fileinput.addEventListener('change', function () { handle(fileinput.files); });
+  ['dragover', 'dragenter'].forEach(function (ev) {
+    dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.remove('over'); });
+  });
+  dropzone.addEventListener('drop', function (e) { handle(e.dataTransfer.files); });
+
+  function handle(files) {
+    for (var i = 0; i < files.length; i++) { uploadFile(files[i]); }
+  }
+
+  function row(name) {
+    var li = document.createElement('li');
+    li.innerHTML = '<span class="fname"></span> <span class="prog muted"></span>';
+    li.querySelector('.fname').textContent = name;
+    list.appendChild(li);
+    return li.querySelector('.prog');
+  }
+
+  function post(url, form) {
+    return fetch(url, {method: 'POST', body: form}).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) { throw new Error(j.detail || ('HTTP ' + r.status)); }
+        return j;
+      });
+    });
+  }
+
+  function uploadFile(file) {
+    var prog = row(file.name);
+    var total = Math.max(1, Math.ceil(file.size / CHUNK));
+    var form = new FormData();
+    form.append('filename', file.name);
+    form.append('content_type', file.type || 'application/octet-stream');
+    form.append('total_chunks', total);
+    form.append('total_bytes', file.size);
+    prog.textContent = 'starting…';
+    post('/upload/session', form).then(function (s) {
+      var sid = s.session_id;
+      // Resume: ask which chunks the server already has.
+      return fetch('/upload/session/' + sid).then(function (r) { return r.json(); })
+        .then(function (st) { return sendChunks(file, sid, total, st.received || [], prog); });
+    }).then(function (result) {
+      prog.textContent = 'done — document ' + (result.document_id || '') + ' queued';
+    }).catch(function (err) {
+      prog.textContent = 'failed: ' + err.message;
+      prog.classList.add('error');
+    });
+  }
+
+  function sendChunks(file, sid, total, received, prog) {
+    var chain = Promise.resolve();
+    for (var i = 0; i < total; i++) {
+      (function (i) {
+        if (received.indexOf(i) !== -1) { return; }  // already there — resume skips
+        chain = chain.then(function () {
+          prog.textContent = 'chunk ' + (i + 1) + '/' + total;
+          var form = new FormData();
+          form.append('chunk', file.slice(i * CHUNK, (i + 1) * CHUNK));
+          return post('/upload/session/' + sid + '/chunk?index=' + i, form);
+        });
+      })(i);
+    }
+    return chain.then(function () {
+      prog.textContent = 'assembling…';
+      return post('/upload/session/' + sid + '/complete', new FormData());
+    });
+  }
+})();
+</script>
+{% endblock %}

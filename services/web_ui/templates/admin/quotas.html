@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Admin · Quotas — DRUID{% endblock %}
+{% block content %}
+<h1>Admin · Quotas</h1>
+<p class="muted">Defaults per spec §4: {{ default_ingest_pages_per_day }} ingestion
+pages/day, {{ default_query_qps }} query QPS per tenant.</p>
+{% if backend_missing %}
+<p class="warn">The <code>/v1/admin/quotas</code> backend endpoint is not
+implemented by document_api yet. Live per-tenant usage will appear here once
+it lands (see web_ui README: admin contract).</p>
+{% endif %}
+<table>
+  <thead><tr><th>Tenant</th><th>Ingestion pages today</th><th>Limit</th><th>Query QPS</th><th>Limit</th></tr></thead>
+  <tbody>
+  {% for q in quotas %}
+    <tr>
+      <td><code>{{ q.group_id or q.tenant }}</code></td>
+      <td>{{ q.ingest_pages_used }}</td>
+      <td>{{ q.ingest_pages_limit }}</td>
+      <td>{{ q.query_qps }}</td>
+      <td>{{ q.query_qps_limit }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">{% if backend_missing %}No data (backend pending).{% else %}No quota records.{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

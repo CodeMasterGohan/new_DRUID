@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Search — DRUID{% endblock %}
+{% block content %}
+<h1>Search your documents</h1>
+<form hx-post="/partials/search" hx-target="#results" hx-swap="innerHTML"
+      hx-indicator="#searching">
+  <input type="search" name="q" required maxlength="2000"
+         placeholder="Ask a question about your documents…" style="width:70%">
+  <input type="hidden" name="top_k" value="8">
+  <button type="submit">Search</button>
+  <span id="searching" class="htmx-indicator muted">searching…</span>
+</form>
+<div id="results">
+  {% if passages %}
+    {% include "_search_results.html" %}
+  {% else %}
+    <p class="muted">Results appear here with source filename and page range.</p>
+  {% endif %}
+</div>
+{% endblock %}

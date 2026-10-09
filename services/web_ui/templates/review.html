@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Review queue — DRUID{% endblock %}
+{% block content %}
+<h1>Review queue</h1>
+<p class="muted">Pages the ingestion router could not resolve on its own.
+{% if not can_review %}You can inspect items; resolving requires the reviewer role.{% endif %}</p>
+<nav class="tabs">
+  {% for s in ["pending", "accepted", "re-routed", "rejected"] %}
+    <a href="/review?status={{ s }}" class="{% if status == s %}active{% endif %}">{{ s }}</a>
+  {% endfor %}
+</nav>
+<table>
+  <thead><tr><th>Item</th><th>Document</th><th>Page</th><th>Status</th><th>Created</th></tr></thead>
+  <tbody>
+  {% for i in items %}
+    <tr>
+      <td><a href="/review/{{ i.item_id }}"><code>{{ i.item_id[:8] }}…</code></a></td>
+      <td><a href="/documents/{{ i.document_id }}"><code>{{ i.document_id[:8] }}…</code></a></td>
+      <td>{{ i.page_index }}</td>
+      <td>{{ i.status }}</td>
+      <td>{{ i.created_at }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No {{ status }} items.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

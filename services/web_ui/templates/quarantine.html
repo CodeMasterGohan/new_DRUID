@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Quarantine — DRUID{% endblock %}
+{% block content %}
+<h1>Quarantine</h1>
+<p class="muted">Documents whose ingestion failed. Re-upload a corrected file
+to retry — the upload path is idempotent on content checksum.</p>
+<table>
+  <thead><tr><th>Name</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+  <tbody>
+  {% for d in documents %}
+    <tr>
+      <td><a href="/documents/{{ d.document_id }}">{{ d.display_name }}</a></td>
+      <td><span class="state state-{{ d.status|lower|replace('_', '-') }}">{{ d.status }}</span></td>
+      <td>{{ d.updated_at }}</td>
+      <td><a class="button" href="/upload">Re-upload</a></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">Nothing in quarantine.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

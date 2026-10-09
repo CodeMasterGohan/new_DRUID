@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Admin · Documents — DRUID{% endblock %}
+{% block content %}
+<h1>Admin · All documents</h1>
+{% if backend_missing %}
+<p class="warn">The <code>/v1/admin/documents</code> backend endpoint is not
+implemented by document_api yet. This page will populate once it lands
+(see web_ui README: admin contract).</p>
+{% endif %}
+<form method="get" action="/admin/documents">
+  <label>Tenant filter
+    <input type="text" name="tenant" value="{{ tenant }}" placeholder="group id (empty = all)">
+  </label>
+  <button type="submit">Filter</button>
+</form>
+<table>
+  <thead><tr><th>Tenant</th><th>Name</th><th>Status</th><th>Updated</th></tr></thead>
+  <tbody>
+  {% for d in documents %}
+    <tr>
+      <td><code>{{ d.group_id or d.tenant or '—' }}</code></td>
+      <td>{{ d.display_name }}</td>
+      <td>{{ d.status or '—' }}</td>
+      <td>{{ d.updated_at or '—' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">{% if backend_missing %}No data (backend pending).{% else %}No documents.{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ document.display_name }} — DRUID{% endblock %}
+{% block content %}
+<h1>{{ document.display_name }}</h1>
+<p class="muted">checksum <code>{{ document.checksum_sha256[:16] }}…</code></p>
+
+{% if job_status %}
+<h2>Ingestion job</h2>
+<table>
+  <tr><th>State</th><td><span class="state state-{{ job_status.state|lower|replace('_', '-') }}">{{ job_status.state }}</span></td></tr>
+  <tr><th>Job</th><td><code>{{ job_status.job_id }}</code> ({{ job_status.job_type }}, attempt {{ job_status.attempt_count }})</td></tr>
+  {% if job_status.error %}<tr><th>Error</th><td class="error">{{ job_status.error }}</td></tr>{% endif %}
+</table>
+{% endif %}
+
+<h2>Versions</h2>
+<table>
+  <thead><tr><th>#</th><th>Status</th><th>Parser</th><th>Pages</th><th>Chunks</th><th>Created</th><th></th></tr></thead>
+  <tbody>
+  {% for v in document.versions %}
+    <tr>
+      <td>{{ v.version_number }}{% if v.is_active %} <span class="badge">active</span>{% endif %}</td>
+      <td><span class="state state-{{ v.status|lower|replace('_', '-') }}">{{ v.status }}</span></td>
+      <td>{{ v.parser }}@{{ v.parser_revision }}</td>
+      <td>{{ v.page_count or '—' }}</td>
+      <td>{{ v.chunk_count_actual or '—' }}</td>
+      <td>{{ v.created_at }}</td>
+      <td></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if document.artifacts and document.artifacts.original %}
+<p><a href="{{ document.artifacts.original.download_url }}">Download original</a>
+   <span class="muted">(signed link, expires)</span></p>
+{% endif %}
+
+<form method="post" action="/documents/{{ document.document_id }}/delete"
+      onsubmit="return confirm('Delete this document? This queues full deletion of all versions and derived data.');">
+  <button type="submit" class="danger">Delete document</button>
+</form>
+<p><a href="/documents">← back to documents</a></p>
+{% endblock %}

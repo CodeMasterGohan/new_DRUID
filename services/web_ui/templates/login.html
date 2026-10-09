@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Log in — DRUID{% endblock %}
+{% block content %}
+<h1>Log in to DRUID</h1>
+<p class="muted">Paste an access token provisioned by your operator. Tokens are
+signed JWTs carrying your user id, tenant, and roles; they are validated on
+every request and never leave this box.</p>
+{% if error %}
+<p class="error">{{ error }}</p>
+{% endif %}
+<form method="post" action="/login">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>Access token
+    <input type="password" name="token" required autocomplete="off"
+           placeholder="paste JWT here" style="width:100%">
+  </label>
+  <button type="submit">Log in</button>
+</form>
+{% endblock %}

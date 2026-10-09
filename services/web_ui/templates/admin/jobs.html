@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Admin · Jobs — DRUID{% endblock %}
+{% block content %}
+<h1>Admin · Jobs</h1>
+{% if backend_missing %}
+<p class="warn">The <code>/v1/admin/jobs</code> backend endpoint is not
+implemented by document_api yet. This page will populate once it lands
+(see web_ui README: admin contract).</p>
+{% endif %}
+<form method="get" action="/admin/jobs">
+  <label>Tenant filter
+    <input type="text" name="tenant" value="{{ tenant }}" placeholder="group id (empty = all)">
+  </label>
+  <button type="submit">Filter</button>
+</form>
+<table>
+  <thead><tr><th>Job</th><th>Tenant</th><th>Type</th><th>State</th><th>Attempts</th><th>Error</th><th>Updated</th></tr></thead>
+  <tbody>
+  {% for j in jobs %}
+    <tr>
+      <td><code>{{ j.job_id[:8] }}…</code></td>
+      <td><code>{{ j.group_id or j.tenant or '—' }}</code></td>
+      <td>{{ j.job_type or '—' }}</td>
+      <td><span class="state state-{{ (j.state or 'unknown')|lower|replace('_', '-') }}">{{ j.state or '—' }}</span></td>
+      <td>{{ j.attempt_count or '—' }}</td>
+      <td class="error">{{ (j.error or '')[:120] }}</td>
+      <td>{{ j.updated_at or '—' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="muted">{% if backend_missing %}No data (backend pending).{% else %}No jobs.{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

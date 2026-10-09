@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Documents — DRUID{% endblock %}
+{% block content %}
+<h1>Documents</h1>
+<p class="muted">Your tenancy's documents. Status refreshes automatically.</p>
+<table>
+  <thead>
+    <tr><th>Name</th><th>Status</th><th>Pages</th><th>Updated</th><th></th></tr>
+  </thead>
+  <tbody id="doc-rows"
+         hx-get="/partials/documents/rows"
+         hx-trigger="every 15s"
+         hx-swap="innerHTML">
+    {% include "_doc_rows.html" %}
+  </tbody>
+</table>
+{% endblock %}

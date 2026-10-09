@@ -1,0 +1,11 @@
+{% for p in passages %}
+<article class="passage">
+  <header>
+    <strong>{{ p.provenance.filename }}</strong>
+    <span class="muted">pages {{ p.provenance.page_start }}–{{ p.provenance.page_end }}</span>
+  </header>
+  <p>{{ p.text }}</p>
+</article>
+{% else %}
+<p class="muted">No passages found for “{{ query }}”.</p>
+{% endfor %}

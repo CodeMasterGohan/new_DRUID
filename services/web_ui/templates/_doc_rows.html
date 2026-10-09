@@ -1,0 +1,16 @@
+{% for d in documents %}
+<tr>
+  <td><a href="/documents/{{ d.document_id }}">{{ d.display_name }}</a></td>
+  <td><span class="state state-{{ d.status|lower|replace('_', '-') }}">v{{ d.version_number }} · {{ d.status }}</span></td>
+  <td>{{ d.page_count }}</td>
+  <td>{{ d.updated_at }}</td>
+  <td>
+    <form method="post" action="/documents/{{ d.document_id }}/delete"
+          onsubmit="return confirm('Delete this document? This queues full deletion of all versions and derived data.');">
+      <button type="submit" class="danger">Delete</button>
+    </form>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">No documents yet. <a href="/upload">Upload one</a>.</td></tr>
+{% endfor %}

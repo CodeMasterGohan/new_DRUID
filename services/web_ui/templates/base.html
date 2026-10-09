@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}DRUID{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+<header>
+  <nav>
+    <span class="brand">DRUID</span>
+    {% if identity is defined and identity %}
+      <a href="/upload">Upload</a>
+      <a href="/documents">Documents</a>
+      <a href="/review">Review queue</a>
+      <a href="/quarantine">Quarantine</a>
+      <a href="/search">Search</a>
+      {% if is_admin %}
+        <span class="nav-admin">Admin:
+          <a href="/admin/documents">Documents</a>
+          <a href="/admin/jobs">Jobs</a>
+          <a href="/admin/quotas">Quotas</a>
+        </span>
+      {% endif %}
+      <span class="nav-right">
+        <span class="tenant" title="Tenant (from your login token)">{{ identity.group_id }}</span>
+        <form method="post" action="/logout" style="display:inline">
+          <button type="submit" class="link-button">Log out</button>
+        </form>
+      </span>
+    {% endif %}
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
