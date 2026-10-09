@@ -1,9 +1,8 @@
 """document_api configuration (spec §4 quotas, §12 storage).
 
 Environment variable names follow the shared ``.env.example`` at the build
-root (no ``DRUID_`` prefix). MinIO client credentials reuse the server-side
-``MINIO_ROOT_USER`` / ``MINIO_ROOT_PASSWORD`` names so no new variables are
-introduced (``MINIO_ACCESS_KEY`` / ``MINIO_SECRET_KEY`` are also accepted).
+root (no ``DRUID_`` prefix). Object-store credentials use the RustFS
+server-side names ``RUSTFS_ACCESS_KEY`` / ``RUSTFS_SECRET_KEY``.
 """
 
 from __future__ import annotations
@@ -33,20 +32,20 @@ class DocumentApiSettings(BaseSettings):
     ingest_queue: str = "ingest"
     delete_queue: str = "delete"
 
-    # --- object storage (MinIO, tenant-scoped keys, §5) ---
-    object_store: str = "minio"  # "minio" | "memory"
-    minio_endpoint: str = "minio:9000"
-    minio_access_key: str = Field(
+    # --- object storage (RustFS, tenant-scoped keys, §5) ---
+    object_store: str = "rustfs"  # "rustfs" | "memory"
+    rustfs_endpoint: str = "rustfs:9000"
+    rustfs_access_key: str = Field(
         default="druid",
-        validation_alias=AliasChoices("MINIO_ACCESS_KEY", "MINIO_ROOT_USER"),
+        validation_alias=AliasChoices("RUSTFS_ACCESS_KEY"),
     )
-    minio_secret_key: str = Field(
+    rustfs_secret_key: str = Field(
         default="",
-        validation_alias=AliasChoices("MINIO_SECRET_KEY", "MINIO_ROOT_PASSWORD"),
+        validation_alias=AliasChoices("RUSTFS_SECRET_KEY"),
     )
-    minio_bucket: str = "druid-artifacts"
-    minio_secure: bool = False
-    minio_presign_expiry_seconds: int = 3600
+    rustfs_bucket: str = "druid-artifacts"
+    rustfs_secure: bool = False
+    rustfs_presign_expiry_seconds: int = 3600
 
     # --- upload limits (§4 quotas) ---
     max_upload_mb: int = 200

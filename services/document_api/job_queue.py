@@ -14,7 +14,7 @@ commit and failing on a missing job row.
 Payload contract (read by the pipeline worker):
 * ingestion: ``{"queue", "pdf_key", "content_type", "page_count",
   "document_id", "document_version_id"}`` — ``pdf_key`` is the tenant-scoped
-  MinIO key of the original file.
+  S3 key of the original file.
 * deletion: ``{"queue", "document_id"}``.
 """
 

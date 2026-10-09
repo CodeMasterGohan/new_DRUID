@@ -340,7 +340,7 @@ def get_document(
     if target is not None:
         key = _original_key(context, doc, target)
         artifacts = _artifact_refs(
-            store, {"original": key}, settings.minio_presign_expiry_seconds
+            store, {"original": key}, settings.rustfs_presign_expiry_seconds
         )
     detail = _doc_to_summary(doc).model_dump()
     return DocumentDetail(

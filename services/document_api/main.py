@@ -100,12 +100,12 @@ def create_app(
     async def lifespan(app: FastAPI):
         log.info(
             "starting document_api: ingest_queue=%s delete_queue=%s "
-            "object_store=%s minio_bucket=%s max_upload_mb=%d "
+            "object_store=%s rustfs_bucket=%s max_upload_mb=%d "
             "max_pages_per_document=%d redis_configured=%s database_configured=%s",
             settings.ingest_queue,
             settings.delete_queue,
             settings.object_store,
-            settings.minio_bucket,
+            settings.rustfs_bucket,
             settings.max_upload_mb,
             settings.max_pages_per_document,
             bool(settings.redis_url),

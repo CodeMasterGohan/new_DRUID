@@ -63,7 +63,7 @@ class EmbedResponse(BaseModel):
 class EmbedImageRequest(BaseModel):
     image_b64: str = Field(default="", min_length=1)
     # object_key is accepted by the schema but not yet wired: page renders
-    # live in MinIO and resolution is a deploy-time integration.
+    # live in RustFS and resolution is a deploy-time integration.
     object_key: str = Field(default="")
     page_label: str = Field(min_length=1)
 
@@ -173,7 +173,7 @@ async def embed_image(req: EmbedImageRequest) -> EmbedImageResponse:
         )
         raise HTTPException(
             status_code=501,
-            detail="object_key resolution (MinIO fetch) is not wired in this "
+            detail="object_key resolution (RustFS fetch) is not wired in this "
             "build; send image_b64 without object_key. See gap list.",
         )
     started = time.monotonic()

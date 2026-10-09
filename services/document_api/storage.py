@@ -1,6 +1,6 @@
 """Tenant-scoped object storage boundary (spec §5).
 
-The production implementation is MinIO (S3-compatible); the in-memory fake
+The production implementation is RustFS (S3-compatible); the in-memory fake
 is for tests and local dev. Storage keys are tenant-scoped
 (``{group_id}/{document_id}/{version_id}/...``) so no key can escape its
 tenant's prefix. Original filenames are display metadata only and never
@@ -56,8 +56,8 @@ class MemoryObjectStore(ObjectStore):
         return None
 
 
-class MinIOObjectStore(ObjectStore):
-    """Production store. The bucket must already exist."""
+class RustFSObjectStore(ObjectStore):
+    """Production S3-compatible object store backed by RustFS (via the minio Python client); the bucket must already exist."""
 
     def __init__(
         self,
@@ -71,7 +71,7 @@ class MinIOObjectStore(ObjectStore):
         try:
             from minio import Minio
         except ImportError as exc:
-            raise RuntimeError("minio package is required for MinIOObjectStore") from exc
+            raise RuntimeError("minio package is required for RustFSObjectStore") from exc
         self._client = Minio(
             endpoint,
             access_key=access_key,
@@ -120,7 +120,7 @@ def storage_key(group_id: str, document_id: str, version_id: str, name: str) -> 
 
 __all__ = [
     "MemoryObjectStore",
-    "MinIOObjectStore",
+    "RustFSObjectStore",
     "ObjectStore",
     "storage_key",
 ]

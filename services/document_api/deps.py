@@ -14,7 +14,7 @@ from services.common.request_context import RequestContext
 
 from internal_auth import trusted_context_from_request
 from settings import DocumentApiSettings
-from storage import MinIOObjectStore, ObjectStore
+from storage import RustFSObjectStore, ObjectStore
 
 
 @lru_cache(maxsize=1)
@@ -35,12 +35,12 @@ def default_object_store(settings: DocumentApiSettings) -> ObjectStore:
 
     if settings.object_store == "memory":
         return MemoryObjectStore()
-    return MinIOObjectStore(
-        endpoint=settings.minio_endpoint,
-        access_key=settings.minio_access_key,
-        secret_key=settings.minio_secret_key,
-        bucket=settings.minio_bucket,
-        secure=settings.minio_secure,
+    return RustFSObjectStore(
+        endpoint=settings.rustfs_endpoint,
+        access_key=settings.rustfs_access_key,
+        secret_key=settings.rustfs_secret_key,
+        bucket=settings.rustfs_bucket,
+        secure=settings.rustfs_secure,
     )
 
 

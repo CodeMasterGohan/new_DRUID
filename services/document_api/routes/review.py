@@ -81,7 +81,7 @@ def get_review_item(
     except NotFoundError:
         raise HTTPException(status_code=404, detail="not found")
     render_url = store.presigned_get_url(
-        item.page_render_ref, expires_seconds=settings.minio_presign_expiry_seconds
+        item.page_render_ref, expires_seconds=settings.rustfs_presign_expiry_seconds
     )
     return ReviewItemDetail(
         item_id=str(item.id),

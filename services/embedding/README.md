@@ -25,7 +25,7 @@ byte-equality with the sibling's formatters.
 ## Endpoints
 
 - `POST /embed` — `{"documents": [{"text", "title", "is_code"}], "queries": [...], "task": "question_answering"|"code_retrieval"|"search_result", "modality": "text"}` → 768-dim normalized vectors. Prefixes are applied server-side.
-- `POST /embed_image` — `{"image_b64": "<png>", "page_label": "Page 3 of doc.pdf"}` → vector in the **same** unified space + `metadata: {"modality": "page_image"}`. `text` holds the page label, never OCR output. (`object_key` → 501: MinIO fetch is deploy-time work.)
+- `POST /embed_image` — `{"image_b64": "<png>", "page_label": "Page 3 of doc.pdf"}` → vector in the **same** unified space + `metadata: {"modality": "page_image"}`. `text` holds the page label, never OCR output. (`object_key` → 501: RustFS fetch is deploy-time work.)
 - `GET /health` — model, modality config, dimension, backend, `model_loaded`.
 
 ## Configuration (env)

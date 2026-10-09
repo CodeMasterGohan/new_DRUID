@@ -56,7 +56,7 @@ request closed with 401.
 - `routes/documents.py`, `routes/review.py` — endpoint handlers
 - `internal_auth.py` — HMAC verification / trusted context
 - `deps.py` — settings, sessions, repository, object store wiring
-- `storage.py` — `ObjectStore` ABC, `MemoryObjectStore`, `MinIOObjectStore`
+- `storage.py` — `ObjectStore` ABC, `MemoryObjectStore`, `RustFSObjectStore`
 - `job_queue.py` — durable job creation + RQ enqueue by dotted-path worker
   entry points (`services.ingestion.pipeline.run_ingestion_job` /
   `run_deletion_job`); the strings are asserted in `test_entrypoints.py`

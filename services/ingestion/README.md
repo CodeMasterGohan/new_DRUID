@@ -16,7 +16,7 @@ Implements spec §5 (ingestion + page router), §6 (canonical tree), §7
 | `chunker.py` | Structural chunker: 420/48 targets, tables split by row groups with repeated headers, **hard rule** — no chunk exceeds `512 − max_query_tokens` tokens (split, never truncate; violations raise). |
 | `identifiers.py` | Configurable exact-match identifier extraction for the Milvus `identifiers` field. |
 | `embeddings.py` | EmbeddingGemma 2 backend abstraction. Contractual task-aware prefixes (`title: … | text: …` / `task: question answering | query: …`, code pair for code). Page-image records in the unified 768-dim space. `MockEmbeddingBackend` for tests/dev. |
-| `pipeline.py` | RQ worker entry points. `run_ingestion_job` drives UPLOADED→…→READY (+RETRY_PENDING/FAILED/REVIEW_REQUIRED) against the real catalog models; `run_deletion_job` drives the §12 deletion workflow. Seams: `IndexSink` (Milvus agent), `ObjectStore` (MinIO prod / memory for tests). |
+| `pipeline.py` | RQ worker entry points. `run_ingestion_job` drives UPLOADED→…→READY (+RETRY_PENDING/FAILED/REVIEW_REQUIRED) against the real catalog models; `run_deletion_job` drives the §12 deletion workflow. Seams: `IndexSink` (Milvus agent), `ObjectStore` (RustFS prod / memory for tests). |
 
 ## Running
 
