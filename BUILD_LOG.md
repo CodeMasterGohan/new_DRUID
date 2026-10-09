@@ -1095,3 +1095,27 @@ is kept unchanged — it works unmodified against any S3-compatible backend.
   `troubleshooting.md` updated; re-synced into `build/skills/druid-sage/`.
 - `build/docs-site/` re-synced from `~/workspace/druid-sage-docs/` (39 files).
 - `docs/architecture-spec-v2.1.md` deliberately untouched (versioned snapshot).
+
+## 2026-10-09 — All containers joined to pre-existing `cora` network (James)
+
+Per James (his server already has the `cora` docker network): every service in
+`deploy/docker-compose.yml` (14), `deploy/docker-compose.gpu.yml` (1), and
+New_sage's `deploy/docker-compose.yml` (13) now also attaches to external
+`cora`. Services keep their project networks (`default`, `druid-net`) so
+intra-project DNS is unchanged — `cora` is purely additive for external
+reachability. Duplicate service names across projects (postgres, redis, etcd,
+embedding, retrieval, rustfs, milvus_setup) resolve unambiguously within each
+project's own network; on `cora`, address by container name.
+
+## 2026-10-09 — Host-port minimization (James)
+
+James's rule: no host port unless a client-side consumer needs it. Removed
+`ports:` from every service except `web_ui` (8005, browser), `mcp_server`
+(8002, his AI CLI), and New_sage `mcp-server` (8010, AI CLI). Everything else
+(gateway, document_api, embedding, retrieval, rustfs, milvus, postgres, redis,
+etcd, vllm-olmocr, workers, one-shots) is container-to-container on the
+compose/`cora` networks. Dropped the now-dead host-port env vars from both
+`.env.example` files. New regression test
+`test_only_allowlisted_services_publish_host_ports` locks the policy in.
+Runbook smoke tests now `docker compose exec` into containers instead of
+curling host ports. Wiring suite: 18/18 pass.
