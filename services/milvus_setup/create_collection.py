@@ -269,6 +269,16 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings.from_env()
     if args.enable_partition_isolation:
         settings.enable_partition_isolation = True
+    log.info(
+        "starting milvus_setup: uri=%s collection=%s alias=%s wait_timeout_s=%.0f "
+        "partition_isolation=%s argv=%s",
+        settings.uri,
+        settings.collection,
+        settings.alias,
+        settings.wait_timeout_s,
+        settings.enable_partition_isolation,
+        " ".join(argv) if argv else "(defaults)",
+    )
 
     try:
         if args.set_alias:

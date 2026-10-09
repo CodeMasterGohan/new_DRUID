@@ -13,10 +13,13 @@ the delete is issued with the correct tenant scope.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
 from .schema import COLLECTION_ALIAS
+
+log = logging.getLogger(__name__)
 
 # Opaque ID contract (same as MCP server / catalog): caller-supplied IDs that
 # do not match are rejected instead of being interpolated into an expression.
@@ -74,9 +77,22 @@ def delete_document(
         DeleteResult with the server-reported delete count.
     """
     expr = build_delete_expr(group_id, document_id)
+    log.info(
+        "milvus delete start: group=%s document=%s alias=%s",
+        group_id,
+        document_id,
+        collection_alias,
+    )
     result = client.delete(collection_name=collection_alias, filter=expr)
     count = result.get("delete_count", 0) if isinstance(result, dict) else getattr(
         result, "delete_count", 0
+    )
+    log.info(
+        "milvus delete finish: group=%s document=%s alias=%s deleted=%d",
+        group_id,
+        document_id,
+        collection_alias,
+        int(count),
     )
     return DeleteResult(
         group_id=group_id,

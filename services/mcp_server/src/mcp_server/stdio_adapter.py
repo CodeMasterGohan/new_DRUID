@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 
@@ -31,6 +32,8 @@ from .clients import (
 from .context import RequestContext, new_request_id, set_context
 from .server import build_fastmcp_for_tests
 from .tools import ServiceDeps
+
+log = logging.getLogger(__name__)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -85,6 +88,12 @@ async def _amain(argv: list[str] | None = None) -> None:
             "RetrievalServiceClient / IngestionServiceClient / CatalogClient "
             "implementations before using the stdio adapter."
         )
+    log.info(
+        "starting mcp_server (stdio): user=%s group=%s roles=%s",
+        ctx.user_id,
+        ctx.group_id,
+        ",".join(sorted(ctx.roles)),
+    )
     deps = ServiceDeps(
         retrieval=InMemoryRetrievalClient(),
         ingestion=InMemoryIngestionClient(),
@@ -97,6 +106,13 @@ async def _amain(argv: list[str] | None = None) -> None:
 
 
 def main() -> None:
+    # Logs go to stderr: stdout is the MCP stdio transport and must stay
+    # protocol-clean.
+    logging.basicConfig(
+        level=logging.INFO,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     asyncio.run(_amain())
 
 
