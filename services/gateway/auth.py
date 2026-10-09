@@ -11,10 +11,13 @@ unvalidated source. Missing or invalid tokens fail closed with
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
 import jwt as pyjwt
+
+log = logging.getLogger(__name__)
 
 
 class AuthError(Exception):
@@ -84,6 +87,7 @@ def _get_key(token: str, settings: JWTSettings):
             response.raise_for_status()
             jwks = response.json()
         except Exception as exc:
+            log.warning("JWKS fetch failed (%s): %s", settings.jwks_url, exc)
             raise AuthError(f"could not fetch JWKS: {exc}") from exc
         keys = {}
         for jwk in jwks.get("keys", []):

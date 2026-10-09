@@ -28,7 +28,11 @@ class EmbeddingServiceSettings(BaseSettings):
     )
     model_id: str = Field(default="google/embeddinggemma-2")
 
-    # "text+image" (440M effective, audio disabled) or "text-only" (270M).
+    # "text+image" or "text-only" modality config for the EmbeddingGemma 2
+    # checkpoint. NOTE: the released google/embeddinggemma-2 repo ships ONE
+    # 744M BF16 checkpoint (~1.49 GB on disk) — there are no separately
+    # downloadable 270M/440M encoders; modality selection is runtime config.
+    # See services/artifacts/manifests/completed/embeddinggemma-2.yaml.
     modality_config: str = Field(default="text+image")
 
     # Embedding width. Must be a validated Matryoshka width.

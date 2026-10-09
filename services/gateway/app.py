@@ -15,6 +15,7 @@ Request lifecycle for every protected route:
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import Depends, FastAPI, Request
@@ -27,6 +28,8 @@ from . import proxy as proxy_module
 from .auth import AuthError, JWTSettings, validate_token
 from .druid_internal import SPOOFABLE_HEADERS
 from .quotas import QuotaConfig, QuotaStore, quota_store_from_env
+
+log = logging.getLogger(__name__)
 
 
 class GatewaySettings(BaseSettings):
@@ -106,6 +109,20 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     jwt_settings = settings.jwt_settings()
     quota_config = settings.quota_config()
     quota_store: QuotaStore = quota_store_from_env(quota_config)
+    log.info(
+        "starting gateway: document_api=%s mcp_server=%s quota_store=%s "
+        "ingest_pages_per_day=%d query_qps=%d max_upload_mb=%d "
+        "max_pages_per_document=%d forward_timeout_s=%.1f jwt_algs=%s",
+        settings.document_api_url,
+        settings.mcp_server_url,
+        type(quota_store).__name__,
+        quota_config.ingest_pages_per_day,
+        quota_config.query_qps,
+        quota_config.max_upload_mb,
+        quota_config.max_pages_per_document,
+        settings.forward_timeout_seconds,
+        ",".join(jwt_settings.algorithms),
+    )
 
     app = FastAPI(title="new_DRUID gateway", version="0.1.0")
     app.state.settings = settings
@@ -141,6 +158,12 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
 
     @app.exception_handler(_AuthHTTPError)
     async def _auth_error_handler(request: Request, exc: "_AuthHTTPError"):
+        log.warning(
+            "auth failed → 401: %s request_id=%s path=%s",
+            exc,
+            _req_id(request),
+            request.url.path,
+        )
         return _unauthorized(str(exc))
 
     # -- public -------------------------------------------------------------
@@ -156,6 +179,12 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
         max_bytes = quota_config.max_upload_mb * 1024 * 1024
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > max_bytes:
+            log.warning(
+                "upload rejected → 413: content_length=%s > max=%d request_id=%s",
+                content_length,
+                max_bytes,
+                context.request_id,
+            )
             return JSONResponse(
                 status_code=413,
                 content={
@@ -175,10 +204,20 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
             try:
                 page_count = int(raw_page_count)
             except (TypeError, ValueError):
+                log.warning(
+                    "upload rejected → 400: bad page_count=%r request_id=%s",
+                    raw_page_count,
+                    context.request_id,
+                )
                 return JSONResponse(
                     status_code=400, content={"detail": "page_count must be an integer"}
                 )
         if page_count < 1 or page_count > quota_config.max_pages_per_document:
+            log.warning(
+                "upload rejected → 400: page_count=%d out of range request_id=%s",
+                page_count,
+                context.request_id,
+            )
             return JSONResponse(
                 status_code=400,
                 content={
@@ -188,6 +227,7 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
             )
         decision = quota_store.consume_ingestion_pages(context.group_id, page_count)
         if not decision.allowed:
+            _log_quota_rejection(request, context, "ingestion", decision)
             return _quota_exceeded(decision.retry_after_seconds)
         return await proxy_module.forward_request(
             request,
@@ -210,6 +250,10 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
         try:
             body = await request.json()
         except Exception:
+            log.warning(
+                "mcp rejected → 400: invalid JSON request_id=%s",
+                context.request_id,
+            )
             return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
         quota_kind, pages = _classify_mcp_call(body)
         if quota_kind == "ingestion":
@@ -217,6 +261,7 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
         else:
             decision = quota_store.check_query(context.group_id)
         if not decision.allowed:
+            _log_quota_rejection(request, context, quota_kind, decision)
             return _quota_exceeded(decision.retry_after_seconds)
         return await proxy_module.forward_request(
             request,
@@ -238,6 +283,7 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
         # ingestion goes through /v1/documents/upload instead.
         decision = quota_store.check_query(context.group_id)
         if not decision.allowed:
+            _log_quota_rejection(request, context, "query", decision)
             return _quota_exceeded(decision.retry_after_seconds)
         return await proxy_module.forward_request(
             request,
@@ -273,6 +319,26 @@ def _classify_mcp_call(body: object) -> tuple[str, int]:
 
 class _AuthHTTPError(Exception):
     """Internal control-flow exception mapped to a 401 response."""
+
+
+def _req_id(request: Request) -> str:
+    return request.headers.get("x-request-id", "") or "-"
+
+
+def _log_quota_rejection(
+    request: Request, context: RequestContext, kind: str,
+    decision,
+) -> None:
+    log.info(
+        "quota exhausted → 429: group=%s kind=%s scope=%s remaining=%d "
+        "request_id=%s path=%s",
+        context.group_id,
+        kind,
+        decision.scope,
+        decision.remaining,
+        context.request_id,
+        request.url.path,
+    )
 
 
 # The default application instance (uvicorn target: services.gateway.app:app).

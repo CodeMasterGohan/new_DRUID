@@ -15,6 +15,7 @@ production services never download at runtime (§3).
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from enum import Enum
 from typing import Literal
@@ -122,6 +123,13 @@ async def embed(req: EmbedRequest) -> EmbedResponse:
     svc = _svc()
     if not req.documents and not req.queries:
         raise HTTPException(status_code=400, detail="documents and queries are both empty")
+    started = time.monotonic()
+    log.info(
+        "embed start: documents=%d queries=%d task=%s",
+        len(req.documents),
+        len(req.queries),
+        req.task.value,
+    )
     try:
         vectors: list[list[float]] = []
         if req.documents:
@@ -134,9 +142,18 @@ async def embed(req: EmbedRequest) -> EmbedResponse:
         if req.queries:
             vectors.extend(await svc.embed_queries(req.queries, task=req.task.value))
     except ValueError as exc:
+        log.warning("embed rejected → 400: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        log.error("embed failed → 500: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    log.info(
+        "embed finish: %d vectors in %.1fms task=%s",
+        len(vectors),
+        elapsed_ms,
+        req.task.value,
+    )
     return EmbedResponse(
         vectors=vectors,
         dimension=svc.settings.dimension,
@@ -150,21 +167,36 @@ async def embed(req: EmbedRequest) -> EmbedResponse:
 async def embed_image(req: EmbedImageRequest) -> EmbedImageResponse:
     svc = _svc()
     if req.object_key:
+        log.warning(
+            "embed_image → 501: object_key resolution not wired (page_label=%r)",
+            req.page_label,
+        )
         raise HTTPException(
             status_code=501,
             detail="object_key resolution (MinIO fetch) is not wired in this "
             "build; send image_b64 without object_key. See gap list.",
         )
+    started = time.monotonic()
+    log.info("embed_image start: page_label=%r", req.page_label)
     try:
         image = decode_image_b64(req.image_b64)
     except ValueError as exc:
+        log.warning("embed_image rejected → 400: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
         result = await svc.embed_image_bytes(image, page_label=req.page_label)
     except ValueError as exc:
+        log.warning("embed_image rejected → 400: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        log.error("embed_image failed → 500: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    log.info(
+        "embed_image finish: page_label=%r in %.1fms",
+        req.page_label,
+        elapsed_ms,
+    )
     return EmbedImageResponse(
         vector=result["vector"],
         dimension=result["dimension"],
