@@ -1119,3 +1119,30 @@ compose/`cora` networks. Dropped the now-dead host-port env vars from both
 `test_only_allowlisted_services_publish_host_ports` locks the policy in.
 Runbook smoke tests now `docker compose exec` into containers instead of
 curling host ports. Wiring suite: 18/18 pass.
+
+## 2026-10-09 — MCP client gaps closed: upload-ticket endpoints (coordinator)
+
+`HttpIngestionClient.register_upload` / `get_job_status` raised
+NotImplementedError (no downstream endpoints). Decision (a): built the
+documented two-phase flow instead of narrowing the ABC.
+- `POST /v1/documents/register` → 201: validates declaration, creates
+  document + job in UPLOADED (not enqueued), issues single-use ticket
+  (TTL `upload_ticket_ttl_seconds`=900, stored on job payload — no migration).
+- `POST /v1/documents/{document_id}/bytes` → 200: redeems ticket
+  (constant-time compare, TTL, single-use; 403/409/410), bytes must match
+  declared size+sha256, then mirrors single-shot upload from version creation.
+- `GET /v1/jobs/{job_id}` → 200: tenant-scoped job status (cross-tenant 404),
+  error excerpt truncated to 500 chars.
+- Client implements both over httpx with signed headers; 404 → NotFoundError.
+Tests: document_api 71 passed (was 49), mcp_server 114 (was 106),
+build-root 349 passed / 4 skipped (web_ui excluded: pre-existing collection
+issue, standalone 32/32). Docs-site api-reference + skill updated.
+Open: register does no quota check (gateway owns quotas per §4); ticket lives
+in job payload (treat as bearer secret in backups).
+
+## 2026-10-09 — Root README rewrite
+- Rewrote root `README.md`: hero + pillar table, security model summary,
+  architecture diagram (cora, host ports 8005/8002), quickstart, 8-tool MCP
+  table with Claude Code config, REST endpoint map, offline-first/artifact
+  policy, repo layout, config table, test counts (349 passed / 4 skipped,
+  web_ui 32/32), docs-site + skill links, H200-remaining status.
