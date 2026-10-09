@@ -146,6 +146,23 @@ services:
       - document_api
     restart: unless-stopped
 
+
+  web_ui:
+    build:
+      context: ..
+      dockerfile: services/web_ui/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      # The UI talks to the gateway only (compose DNS); the browser reaches
+      # the UI on the host-mapped port.
+      GATEWAY_URL: "http://gateway:8000"
+    ports:
+      - "${WEB_UI_PORT:-8005}:8005"
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
   embedding:
     build:
       context: ..
@@ -187,6 +204,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      # Shared with the gpu project so workers can reach vLLM by its
+      # compose service name (vllm-olmocr). Create once:
+      #   docker network create druid-net
+      - druid-net
     restart: unless-stopped
     # Scale CPU workers: docker compose up -d --scale ingestion=4
 
@@ -196,3 +218,8 @@ volumes:
   miniodata:
   etcddata:
   milvusdata:
+
+networks:
+  druid-net:
+    name: druid-net
+    external: true

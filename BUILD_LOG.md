@@ -668,3 +668,317 @@ the provenance delimiters (attribute-escaped like the other fields). The
 retrieval service already resolved filename per hit — only the MCP
 provenance model was dropping it. Test added:
 `test_render_includes_filename_and_pages`. mcp_server suite: 75/75 pass.
+
+---
+
+## 2026-10-08 — Hardening run (`new-druid-full-build-attempt`, manually triggered by James)
+
+Continue-mode: no rebuild from scratch. Test sweep via subagent + wiring
+audit + dependency re-pin by Finch. Final: **343 passed, 12 skipped, 0
+failed** — unified `pytest services/` (273 passed / 4 skipped) plus
+build-root `tests/` (70 passed / 8 skipped).
+
+### 1. Test sweep (subagent) — all green after 2 stale-test fixes
+- `tests/test_deploy_wiring.py::test_gateway_cmd_matches_module` asserted
+  `"main:app"` — stale from before the hand fix; updated to `"app:app"`.
+- `tests/test_retrieval_seam.py` constructed `PassageProvenance` without the
+  required `filename` field (added 2026-10-08); fixture + assertion updated.
+- Hand fixes verified: gateway Dockerfile CMD is `uvicorn app:app`;
+  `enqueue_ingestion_job(..., payload_extra=None)` present and merged.
+- Observation (left for this run, fixed below): `test_imports.py`'s
+  `test_service_code_not_yet_built` never fired (dotted names used as paths).
+
+### 2. CRITICAL dependency re-pin — EmbeddingGemma 2 (Finch)
+`sentence-transformers==3.3.1/3.4.1` + `transformers==4.48.3` could not
+load the released `google/embeddinggemma-2` checkpoint (needs ST>=6.1.0,
+transformers 5.x per its `config_sentence_transformers.json`).
+- **embedding**: ST==6.1.0, transformers==5.18.0 (checkpoint built with
+  5.18.0.dev0), torch stays ==2.6.0, huggingface-hub 0.27.1→==1.33.0
+  (ST 6.1.0 requires >=1.3.0). pip-compile resolves the full closure.
+- **ingestion**: ST==6.1.0, transformers==5.18.0 added, torch==2.6.0 pinned
+  (matches embedding). pip-compile resolves the full closure.
+- Two **phantom pins** found by pip-compile (never published to PyPI):
+  `pdftext==0.4.2` → `==0.4.1`; `olmocr==0.4.0` → `==0.4.27`
+  (0.4.2's unconditional `transformers==4.55.2` conflicts with the 5.x
+  requirement; 0.4.27 keeps transformers under the `gpu` extra only, and
+  its `build_no_anchoring_v4_yaml_prompt` is byte-identical to 0.4.2's —
+  verified by source diff). `pypdfium2` aligned 4.30.1→4.30.0 (pdftext
+  0.4.1 pins it exactly).
+- Code API check: `SentenceTransformer(path, device="cpu",
+  trust_remote_code=False, config_kwargs={...})` and
+  `.encode(..., normalize_embeddings=, show_progress_bar=)` are valid
+  against ST 6.1.0 (comment in `embeddings.py` records this).
+- **PrefixContract prompt strings untouched** (verified verbatim 2026-10-08).
+- Embedding + ingestion suites re-run post-pin: **68/68 pass**.
+- Stale comment fixed: `embedding/settings.py` no longer claims 270M/440M
+  encoders (points at the manifest's single-744M-checkpoint reality).
+
+### 3. Cross-service wiring fixes (Finch)
+- **ingestion Dockerfile — two real bugs fixed:**
+  (a) exec-form `CMD ["rq", "worker", "--url", "${REDIS_URL}", ...]` never
+  expands `${REDIS_URL}` (Docker does not expand env vars in exec form) —
+  switched to shell form; (b) flat `COPY services/ingestion/ /app/` broke
+  the RQ dotted-path entry points (`services.ingestion.pipeline.*`) the
+  document API enqueues — now copies the full services tree with
+  `PYTHONPATH=/app` (verified by importing both entry points in a
+  simulated image layout). Also added the CPU-index torch two-step
+  (mirrors the embedding service; CUDA torch must never land here).
+- **ingestion → vLLM was unwired:** `olmocr_client` defaulted to
+  `http://olmocr-vllm:8000` (no such service; real name is `vllm-olmocr`)
+  and the CPU/GPU compose projects shared no network (separate default
+  networks → no cross-project DNS). Fixed: default URL →
+  `http://vllm-olmocr:8000`; new shared external `druid-net` network in
+  both compose files, attached to `ingestion` and `vllm-olmocr`;
+  `OLMOCR_VLLM_URL` added to `.env.example` (replacing the dead
+  `VLLM_HOST` var nothing read); runbook gained the
+  `docker network create druid-net` step-0.
+- **`.env.example` gained `MINILM_TOKENIZER_PATH`** (read by
+  `ingestion/chunker.py::_default_token_len`, previously untemplated).
+- **New build-root `.dockerignore`**: keeps `.venv/` (document_api's is
+  90 MB and was COPY'd into its image), `__pycache__/`, `tests/`,
+  `.env`, `.git/` out of image build contexts.
+- uvicorn CWD behavior verified empirically: `--app-dir` defaults to
+  `""` (= CWD on sys.path), so `uvicorn app:app` / `main:app` resolve in
+  the gateway/retrieval/embedding images. No changes needed there.
+- 5 new deploy-wiring regression tests (ingestion tree layout, no
+  unexpanded `${...}` in exec-form CMD, `.dockerignore`, shared
+  vLLM network). Wiring suite: 15/15 pass.
+
+### 4. Test packaging unified — one command runs the whole tree
+- Root cause of the old `ImportPathMismatchError`: every suite dir is
+  named `tests`. Fixed by making each a real package
+  (`services/<svc>/tests/__init__.py` + missing service-level
+  `__init__.py` for artifacts/embedding/mcp_server) so modules import as
+  `services.<svc>.tests.test_*` (unique). Build-root `conftest.py`
+  documents the three sys.path entries (build root,
+  `services/mcp_server/src`, `services/document_api/`).
+- Gotchas found and fixed along the way: `services/mcp_server/pyproject.toml`
+  has its own `[tool.pytest.ini_options]` (`asyncio_mode=auto`), which
+  re-roots pytest and drops the root conftest for mcp-only targets —
+  unified runs use the build-root ini, so `asyncio_mode=auto` was added
+  there too (14 unmarked async mcp tests relied on it); `pypdf` installed
+  into the build-root `.venv` (document_api tests need it).
+- `python -m pytest` from the build root now runs all 273 service tests
+  in ~7s. Per-service runs still work unchanged.
+
+### 5. pip-compile verification (repo policy)
+All 9 services' pin sets resolve to consistent closures via pip-compile
+(pip-tools 7.6.2, PyPI metadata); headers in each `requirements.txt`
+record the 2026-10-08 verification. Locked files must still be
+regenerated on the 3.11 image target before release (this VM is 3.12).
+
+### 6. Not done / gap list (needs James, his H200, or later work)
+- **Spec §8 correction (flagged, NOT rewritten):** §8 claims a quantized
+  sub-1 GB footprint and independently-loadable 270M/440M/300M encoders.
+  The released repo is a single 744M BF16 checkpoint (~1.49 GB on disk,
+  ~3 GB+ RAM at serving). Needs his sign-off before the spec is edited.
+- **Six §15 spec decisions** still unanswered — v2.1 defaults in use.
+- **MinIO image tag** still `minio/minio:latest` (Docker Hub API
+  unreachable from this environment; pin a dated RELEASE tag at deploy).
+- **M1 eval-corpus construction** (needs his documents); router thresholds
+  stay provisional until the ≥95% routing-accuracy gate.
+- **Live-infra integration tests**: Alembic vs real PostgreSQL, Redis Lua
+  quota scripts, Milvus setup/idempotency/alias cutover, vLLM olmOCR
+  smoke + GPU-arbitration burn-in, real EmbeddingGemma 2 backend warmup
+  (ST backend coded but never run against weights), real MiniLM tokenizer
+  budget check. All have named skipped tests.
+- **Real MCP downstream HTTP clients** (retrieval/ingestion/catalog) still
+  ABCs + fakes; compose runs MCP with `DRUID_MCP_DEV_FAKE_CLIENTS=1`.
+- **No GitHub push** (needs his explicit approval); no model downloads.
+- vLLM healthcheck uses `curl` — confirm the `vllm/vllm-openai:v0.7.3`
+  image ships it, at deploy time.
+
+---
+
+## 2026-10-09 — Logging audit + gap-fill (all non-GPU services, per James's request)
+
+House style: `log = logging.getLogger(__name__)` per module, %-style format
+args, INFO/WARNING/ERROR/DEBUG, `logger.exception` in handlers. (Existing
+modules kept their names — e.g. `druid.ingestion`, `retrieval`,
+`milvus_setup` — not renamed.) No shared `get_logger()` helper was added:
+two lines per module matched the house pattern and a helper would not have
+reduced duplication. Stdlib only, no new dependencies, no unrelated
+reformats. GPU serving code (vLLM/olmOCR server side) untouched — only the
+HTTP *client* (`ingestion/olmocr_client.py`) was instrumented.
+
+### Per-service changes
+
+- **gateway** (`app.py`, `proxy.py`, `auth.py`): startup banner at
+  `create_app()` (upstreams, quota-store backend, quota limits, forward
+  timeout, JWT algs). Auth failures → 401 logged at WARNING (no token
+  contents). Quota rejections → 429 logged at INFO with group, quota kind,
+  scope, remaining, request_id, path. Upload 413/400 rejections at WARNING.
+  Invalid MCP JSON at WARNING. `proxy.forward_request`: INFO start/finish
+  with method/path/upstream/request_id/group_id + duration_ms; upstream
+  timeout → 504 and transport error → 502 at WARNING. JWKS fetch failure
+  at WARNING in `auth.py`.
+- **document_api** (`main.py`, `routes/documents.py`, `routes/review.py`,
+  `job_queue.py`): lifespan startup banner (queues, object-store backend,
+  bucket, upload limits, redis/database configured flags — values, never
+  secrets). Error handlers log 401/403/409 at WARNING, 404 at INFO with
+  path + request_id. Upload: INFO start (filename, group, request_id) +
+  finish (document_id, version_id, job_id, page_count, duration_ms);
+  validation/auth rejections at WARNING; enqueue failure at ERROR with
+  job_id; defensive except → `log.exception`; best-effort orphan-cleanup
+  failures now logged at DEBUG (were silent `pass`). Delete: INFO
+  start/finish with document/job IDs, dedup-on-conflict at INFO, enqueue
+  failure at ERROR. Review resolve: INFO business event (item, decision,
+  reviewed_by, group, request_id); 403/404/409 at WARNING/INFO.
+  `enqueue_rq`: INFO per enqueued job (job_id, type, queue, entrypoint).
+- **catalog** (`activation.py`, `repository.py`): no entrypoint (library).
+  `activate_version`: INFO at start and on completion (version → READY,
+  document, group, deactivated-previous count); every rejection path now
+  logs at WARNING via a `_reject` helper (quarantine, status, chunk-count,
+  missing baseline, deleted document). Repository business events at INFO:
+  `create_job`, `soft_delete_document`, `quarantine_page`,
+  `resolve_quarantine_item` (IDs + tenant context).
+- **mcp_server** (`server.py`, `tools.py`, `stdio_adapter.py`): startup
+  banner in `create_app()` (JWT algs/issuer/audience, origin-allowlist
+  count, dev-fake-clients flag — never secrets). `AuthMiddleware`:
+  WARNING on origin rejection / missing-or-malformed auth / bad token;
+  INFO per-request finish (method, path, status, duration_ms, group,
+  request_id). `_require` wrapper: INFO tool start/finish with tool name,
+  user, group, request_id, duration_ms; `log.exception` on tool failure.
+  stdio adapter: startup banner (user, group, roles) with
+  `logging.basicConfig(..., stream=sys.stderr)` — stdout stays
+  protocol-clean for the MCP transport.
+- **ingestion**: `pipeline.py` already logged transitions; added worker
+  entry INFO in `run_ingestion_job` / `run_deletion_job` (job_id).
+  `olmocr_client.py` (vLLM HTTP client — in scope): per-attempt WARNING on
+  request failure and quality rejection (page_index, attempt n/max,
+  reason); WARNING when a page is parked for review; INFO on accepted
+  (attempts, latency). `native_worker`, `router`, `chunker`, `tables`,
+  `tree`, `embeddings`, `config` needed nothing: their excepts all raise
+  (ImportError→RuntimeError, env-parse defaults) — no silent paths.
+- **embedding** (`main.py` already had the startup banner; `service.py`
+  already logged): `/embed` and `/embed_image` now log INFO start
+  (counts, task / page_label) and finish (vector count, duration_ms);
+  400s at WARNING, 500s at ERROR, the 501 object_key branch at WARNING.
+- **retrieval**: `service.search()` INFO start (group, request_id,
+  query_chars) and finish (result count, duration_ms); INFO when the
+  page-image reranker-bypass fallback triggers (count); INFO when
+  catalog reconciliation drops mid-search deactivations. `main.wire()`
+  startup banner (embedding dim, candidate widths, expand_neighbors);
+  invalid-JSON 400 at WARNING with request_id; `catalog_port` logs the
+  hard-filter query failure at WARNING before raising DependencyError.
+  Unhandled-exception handler already used `log.exception`.
+- **milvus_setup**: `create_collection.py` already well logged; added a
+  startup banner in `main()` (uri, collection, alias, timeout, argv).
+  `deletion.delete_document`: INFO start/finish with group, document,
+  alias, deleted count.
+- **artifacts** (`cli.py`): `print()` diagnostics converted to logging
+  (INFO/ WARNING/ERROR, `basicConfig` in `main()` + startup banner with
+  command + manifest). The `OK:` / `INVALID:` / `FAILED:` verdict lines
+  stay on stdout/stderr as the CLI result payload (Docker ENTRYPOINT
+  contract) — verified: diagnostics on stderr, `OK:` on stdout, exit 0.
+
+### Verification
+
+- Grep audit: zero bare `except:` and zero `except ...: pass` remain in
+  `services/`; `print(` remains only in the artifacts CLI verdict lines
+  (intentional payload) and one test fixture string.
+- `python -m pytest` from the build root: **273 passed, 4 skipped**
+  (skips are pre-existing live-Milvus tests in
+  `services/milvus_setup/tests/test_setup_live.py` — need
+  `DRUID_LIVE_MILVUS=1` + a real Milvus; not runnable on this VM).
+- Per-service: gateway 19, document_api 34, catalog 16, ingestion 51,
+  embedding 17, retrieval 25, milvus_setup 15 (+4 skipped), artifacts 21,
+  mcp_server 75 — all green.
+- Smoke-tested: gateway app import (banner fires), document_api
+  `create_app()`, artifacts CLI `validate` on
+  `manifests/olmocr-2-7b-1025-fp8.yaml` (stderr diagnostics, stdout
+  `OK:`, exit 0).
+
+### Deliberately left alone
+
+- vLLM/olmOCR *serving* code: the build tree contains no serving code for
+  it (only the `OlmOcrClient` HTTP client, which was instrumented); the
+  H200 GPU path has its own logging per the task.
+- `document_api/validation.py`, `storage.py`, `deps.py`,
+  `internal_auth.py`, `gateway/druid_internal.py`, `quotas.py` stores,
+  `mcp_server/auth.py` + `clients.py`, `catalog/models.py` + alembic
+  migrations, `retrieval/reranker.py`, `milvus_setup/schema.py`,
+  `artifacts/artifact_manifest.py`: pure helpers, schema, or raise-loud
+  code — no silent failure paths, so no logging added (failures surface
+  through the instrumented callers).
+
+## 2026-10-09 — New service: web_ui (spec §16, v2.2)
+
+Tenant document-management UI. FastAPI + Jinja2 + htmx 2.0.4 (vendored at
+`services/web_ui/static/htmx.min.js` — no CDN, offline-first). Standalone
+service: talks ONLY to the gateway with the user's own Bearer <redacted> (`POST
+/v1/documents/upload`, `/v1/documents*`, `/v1/review/*`, `POST /mcp` →
+`search_knowledge_base`). No direct Postgres/Milvus/MinIO access.
+
+Auth: `auth.py` is a byte-mirror of `services/gateway/auth.py` (verified by
+diff — docstring differs only). Login page accepts a pasted provisioned JWT,
+validates it, stores it in HttpOnly/Secure/SameSite cookie. Identity comes
+from the token only; spoofable headers stripped by middleware; fail closed.
+Roles from token claims: `user`, `reviewer` (review actions; admins always
+can), `admin` (operator views). Admin is never grantable through the UI.
+
+Pages: Upload (drag-and-drop, chunked/resumable via /upload/session* — the
+browser splits files, `complete` assembles and forwards ONE multipart upload;
+gateway enforces authoritative limits), Documents (enriched with active-version
+status/page count, htmx 15s polling, version history, delete w/ confirm),
+Review queue (list + detail with page render/parse attempts/diagnostics;
+accept/re-route/reject gated on reviewer role, backend enforces again),
+Quarantine (FAILED docs), Search (provenance-tagged passages w/ filename +
+page range), Admin: all-documents, jobs, quotas.
+
+Deviations/notes:
+- Internal port 8005, not 8003 (8003=embedding, 8004=retrieval). Compose
+  service + `WEB_UI_PORT`/`GATEWAY_URL` added to deploy/docker-compose.yml
+  and .env.example.
+- Admin pages call PROPOSED `/v1/admin/*` document_api endpoints (documents,
+  jobs, quotas) — these do NOT exist downstream yet; pages degrade gracefully
+  with an explanatory notice. Exact proposed contract documented in
+  services/web_ui/README.md. Follow-up needed in document_api.
+- No credential store exists in new_DRUID: login is token-paste; tokens are
+  provisioned out-of-band by the operator (documented in README).
+
+Tests: 32 passed, 0 failed (services/web_ui/.venv). Tenant isolation proven
+against a per-token mocked gateway: spoofed X-Group-Id/X-Druid-* headers and
+query params ignored, tenant A cannot see/reach tenant B's documents,
+non-admin → 403 on all admin views, roles only from token claims, chunked
+upload round-trip with out-of-order resume and byte-identical assembly,
+search provenance rendering.
+
+## 2026-10-09 — Admin API: /v1/admin/{documents,jobs,quotas} implemented (Finch)
+
+The web_ui admin pages called three document_api endpoints that did not
+exist (README marked the contract "proposed"). All three are now implemented
+in document_api, reachable via the gateway's /v1/{path:path} proxy:
+
+- `routes/admin.py` (new): `GET /v1/admin/documents` (tenant + status
+  filters, pagination; rows carry document_id, display_name, group_id,
+  latest-version status, updated_at), `GET /v1/admin/jobs` (tenant filter;
+  rows carry job_id, group_id, job_type, state, attempt_count, error excerpt
+  truncated to 500 chars, document_id, created_at, updated_at,
+  computed duration_seconds), `GET /v1/admin/quotas` (per-tenant
+  ingest_pages_used/limit and query_qps/limit). All require the `admin`
+  role in JWT claims (403 otherwise); unauthenticated → 401. Tenant filter
+  is an explicit `tenant` query param (tenant name = group_id claim), never
+  a header. Wired into main.py.
+- `services/catalog/repository.py`: new `list_all_documents`,
+  `list_all_jobs`, `list_tenant_names` — deliberately bypass the tenant
+  predicate; docstrings require callers to enforce the admin role.
+- `document_api/settings.py`: `quota_ingest_pages_per_day` (1000) and
+  `quota_query_qps` (10) mirror the gateway's QUOTA_* env vars for limit
+  reporting. `deps.py`: new `get_redis_client` (lazy redis import, matching
+  the job_queue.py convention — the test venv has no redis package).
+- Quotas read the gateway's own Redis counters
+  (`druid:quota:ingest:{tenant}:{date}`, `druid:quota:query:{tenant}`; key
+  scheme documented in `_quota_keys`, must stay in sync with
+  gateway/quotas.py). Redis unreachable → usage reported as null, not zero.
+- Contract deltas vs the web_ui README proposal (documented in the web_ui
+  README): added `status` filter on documents (latest-version state, not
+  active-version — fresh uploads have no active version yet); jobs gained
+  document_id/created_at/duration_seconds; NO `progress` field (jobs table
+  has no progress column; state + attempt_count are the signal).
+- Tests: new `tests/test_admin.py` — 15 tests (cross-tenant listing, tenant
+  + status filters, 400 on bad status, 403 for non-admin/reviewer, 401
+  unauthenticated, quota shape/limits, Redis-down → null usage).
+  document_api suite: 49 passed (34 existing + 15 new). Catalog suite:
+  16 passed. web_ui suite: 32 passed (README/api_client comments updated
+  from "proposed" to implemented).
