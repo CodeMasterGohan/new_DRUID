@@ -19,13 +19,7 @@ fixed; these change only the host side (e.g. when colocating with new_DRUID).
 | `MODEL_PATH` | `/artifacts/embeddinggemma-2` | EmbeddingGemma 2 checkpoint in the model-artifacts volume |
 | `MINILM_MODEL_PATH` | `/artifacts/minilm` | MiniLM reranker checkpoint |
 | `MINILM_TOKENIZER_PATH` | `/artifacts/minilm` | MiniLM tokenizer (defaults to the model path in retrieval) |
-| `MCP_HOST_PORT` | `8010` | Host port for mcp-server |
-| `RETRIEVAL_HOST_PORT` | `8011` | Host port for retrieval |
-| `EMBEDDING_HOST_PORT` | `8012` | Host port for embedding |
-| `MILVUS_HOST_PORT` / `MILVUS_MGMT_HOST_PORT` | `19531` / `9092` | Host ports for Milvus |
-| `RUSTFS_HOST_PORT` / `RUSTFS_CONSOLE_HOST_PORT` | `9010` / `9011` | Host ports for RustFS |
-| `REDIS_HOST_PORT` | `6380` | Host port for Redis |
-| `POSTGRES_HOST_PORT` | `5433` | Host port for Postgres |
+| `MCP_HOST_PORT` | `8010` | Host port for mcp-server (the only published port) |
 
 ## mcp-server
 

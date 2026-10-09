@@ -40,24 +40,15 @@ Verify: `docker compose logs embedding | grep -i "offline\|model loaded"` (model
 loaded read-only, no download); gateway health/ auth checks; Milvus collection
 `project_knowledge_base_v1` with alias `project_knowledge_base` exists.
 
-## new_DRUID port map (host defaults)
+## new_DRUID port map
 
-| Service | Host port |
-|---|---|
-| gateway | 8080 (container 8000) |
-| document_api | 8001 |
-| mcp_server | 8002 |
-| embedding | 8003 |
-| retrieval | 8004 |
-| **web_ui** | **8005** |
-| vLLM/olmOCR | 8000 |
-| RustFS API / console | 9000 / 9001 |
-| Milvus | 19530 (API), 9091 (mgmt) |
+Host-port policy (2026-10-09): only `web_ui` (8005, browser) and `mcp_server`
+(8002, AI CLI) publish host ports. Everything else is container-to-container
+(container ports: gateway 8000, document_api 8001, embedding 8003, retrieval
+8004, vLLM 8000, RustFS 9000/9001, Milvus 19530/9091).
 
-**Resolved 2026-10-09:** `GATEWAY_PORT` now defaults to `8080` in
-`deploy/docker-compose.yml` (matching `.env.example`); vLLM keeps host port
-8000. The runbook's vLLM smoke check (`localhost:8000/health`) hits vLLM;
-the gateway smoke check (`localhost:8080/healthz`) hits the gateway.
+**Superseded 2026-10-09:** the gateway no longer publishes a host port (was
+8080); smoke checks run via `docker compose exec`.
 
 ## GPU arbitration (new_DRUID)
 

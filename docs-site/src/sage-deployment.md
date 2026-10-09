@@ -18,30 +18,31 @@ The target is James's H200 box, running alongside new_DRUID.
 Defined in `deploy/docker-compose.yml`. Twelve compose services: the 9
 runtime services plus 2 one-shot jobs and 1 internal sidecar.
 
-| Service | Container port | Default host port | Notes |
+| Service | Container port | Host port | Notes |
 |---|---|---|---|
-| `mcp-server` | 8000 | `MCP_HOST_PORT` → 8010 | FastMCP, binds `0.0.0.0:8000` in-container |
-| `retrieval` | 8001 | `RETRIEVAL_HOST_PORT` → 8011 | |
-| `embedding` | 8002 | `EMBEDDING_HOST_PORT` → 8012 | |
+| `mcp-server` | 8000 | `MCP_HOST_PORT` → 8010 | FastMCP, binds `0.0.0.0:8000` in-container; published for the AI CLI |
+| `retrieval` | 8001 | — (internal-only) | |
+| `embedding` | 8002 | — (internal-only) | |
 | `ingestion-worker` | — | — | RQ `sage-ingest`; scale with `--scale ingestion-worker=4` |
 | `crawler-worker` | — | — | RQ `sage-crawl` |
-| `milvus-standalone` | 19530 / 9091 | `MILVUS_HOST_PORT` → 19531 / `MILVUS_MGMT_HOST_PORT` → 9092 | `milvusdb/milvus:latest` (CPU); shares RustFS bucket `sage-milvus` |
-| `rustfs` | 9000 / 9001 | `RUSTFS_HOST_PORT` → 9010 / `RUSTFS_CONSOLE_HOST_PORT` → 9011 | `rustfs/rustfs:1.0.1` (S3-compatible; replaced MinIO, whose community edition was archived in 2026) |
-| `postgres` | 5432 | `POSTGRES_HOST_PORT` → 5433 | `postgres:16.6-alpine` |
-| `redis` | 6379 | `REDIS_HOST_PORT` → 6380 | `redis:7.4.2-alpine`, AOF enabled |
+| `milvus-standalone` | 19530 / 9091 | — (internal-only) | `milvusdb/milvus:latest` (CPU); shares RustFS bucket `sage-milvus` |
+| `rustfs` | 9000 / 9001 | — (internal-only) | `rustfs/rustfs:1.0.1` (S3-compatible; replaced MinIO, whose community edition was archived in 2026) |
+| `postgres` | 5432 | — (internal-only) | `postgres:16.6-alpine` |
+| `redis` | 6379 | — (internal-only) | `redis:7.4.2-alpine`, AOF enabled |
 | `etcd` | — | — | Internal only; required by Milvus 2.6.x standalone. Not part of the client port contract. |
 | `catalog-migrate` | — | — | One-shot: Alembic migrations, then exits |
 | `milvus_setup` | — | — | One-shot: provisions `sage_chunks` idempotently |
 
+Host-port policy (2026-10-09): only `mcp-server` publishes a host port;
+everything else is container-to-container on the compose/`cora` networks.
+
 Named volumes: `pgdata`, `redisdata`, `rustfsdata`, `etcddata`, `milvusdata`,
 `model-artifacts`.
 
-The port contract is fixed on the container side. The default host ports sit
-in a separate block from new_DRUID's (gateway 8080, vLLM 8000, document_api
-8001, mcp 8002, embedding 8003, retrieval 8004, web_ui 8005, rustfs 9000/9001,
-milvus 19530/9091), so the two stacks no longer collide out of the box. If
-you need different ports, remap the `${*_HOST_PORT}` variables in `.env` —
-inter-service URLs use compose DNS names and fixed container ports, so they
+The port contract is fixed on the container side. Host-port policy
+(2026-10-09): only `mcp-server` publishes a host port (`MCP_HOST_PORT` →
+8010, for the AI CLI); everything else is container-to-container.
+Inter-service URLs use compose DNS names and fixed container ports, so they
 never need changing.
 
 ## Model artifact staging
