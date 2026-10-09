@@ -304,12 +304,7 @@ by the operator (see <a href="druid-web-ui.html">Web UI</a>).</p>
 <tr>
 <td><code>OLMOCR_VLLM_URL</code></td>
 <td><code>http://vllm-olmocr:8000</code></td>
-<td>Base URL of the vLLM OpenAI-compatible endpoint; read by ingestion workers; resolves via shared <code>druid-net</code></td>
-</tr>
-<tr>
-<td><code>VLLM_PORT</code></td>
-<td><code>8000</code></td>
-<td>Host-side port of the vLLM endpoint</td>
+<td>Base URL of the vLLM OpenAI-compatible endpoint; read by ingestion workers; resolves via shared <code>druid-net</code> (container-to-container; no host port)</td>
 </tr>
 <tr>
 <td><code>VLLM_GPU_MEMORY_UTILIZATION</code></td>
@@ -324,6 +319,10 @@ by the operator (see <a href="druid-web-ui.html">Web UI</a>).</p>
 </tbody>
 </table>
 <h2 id="service-ports">Service ports</h2>
+<p>Host-port policy (2026-10-09): only <code>WEB_UI_PORT</code> (8005, browser) and
+<code>MCP_PORT</code> (8002, AI CLI) publish host ports. Everything else is
+container-to-container — the remaining <code>*_PORT</code> variables were removed from
+<code>.env.example</code>.</p>
 <table>
 <thead>
 <tr>
@@ -334,39 +333,19 @@ by the operator (see <a href="druid-web-ui.html">Web UI</a>).</p>
 </thead>
 <tbody>
 <tr>
-<td><code>GATEWAY_PORT</code></td>
-<td><code>8080</code></td>
-<td>Host mapping; container listens on 8000. <strong>Must not collide with <code>VLLM_PORT</code></strong> — both compose projects run on the same host</td>
-</tr>
-<tr>
-<td><code>DOCUMENT_API_PORT</code></td>
-<td><code>8001</code></td>
-<td></td>
-</tr>
-<tr>
 <td><code>MCP_PORT</code></td>
 <td><code>8002</code></td>
-<td></td>
-</tr>
-<tr>
-<td><code>EMBEDDING_PORT</code></td>
-<td><code>8003</code></td>
-<td></td>
-</tr>
-<tr>
-<td><code>RETRIEVAL_PORT</code></td>
-<td><code>8004</code></td>
-<td></td>
+<td>Host mapping for the AI CLI</td>
 </tr>
 <tr>
 <td><code>WEB_UI_PORT</code></td>
 <td><code>8005</code></td>
-<td></td>
+<td>Host mapping for browser access</td>
 </tr>
 </tbody>
 </table>
-<p>Container-internal ports are the un-prefixed values; only the host-side
-mapping moves (documented in the template).</p>
+<p>Container-internal ports: gateway 8000, document_api 8001, embedding 8003,
+retrieval 8004, vLLM 8000, RustFS 9000/9001, Milvus 19530/9091.</p>
 <h2 id="service-urls-compose-dns-service-names-use-underscores">Service URLs (compose DNS — service names use underscores)</h2>
 <table>
 <thead>

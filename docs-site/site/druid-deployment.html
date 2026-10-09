@@ -75,7 +75,7 @@ docker compose -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
 
 # 4. GPU plane (H200 host only)
 docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
-curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
+docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
 </code></pre>
 <h2 id="compose-projects">Compose projects</h2>
 <table>
@@ -106,11 +106,14 @@ curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
 <ul>
 <li><code>druid-net</code> is declared <strong>external</strong> in both files and attached to
   <code>ingestion</code> and <code>vllm-olmocr</code> so workers resolve <code>vllm-olmocr</code> by
-  service name.</li>
-<li>Gateway host port is <strong>8080</strong> (<code>GATEWAY_PORT</code>; container still listens
-  on 8000) because vLLM binds host port 8000 on the same machine.
+  service name. All three compose files also attach every service to the
+  pre-existing external <code>cora</code> network (additive; project networks kept).</li>
+<li>Host-port policy (2026-10-09): only <code>web_ui</code> (8005, browser) and
+  <code>mcp_server</code> (8002, AI CLI) publish host ports; everything else is
+  container-to-container. Enforced by
+  <code>test_only_allowlisted_services_publish_host_ports</code>.
   Compose service names use underscores (<code>document_api</code>,
-  <code>mcp_server</code>) — gateway defaults were corrected to match.</li>
+  <code>mcp_server</code>).</li>
 <li><code>embedding</code> and <code>retrieval</code> mount <code>${MODEL_DIR:-/models}:/models:ro</code>
   (read-only); <code>ingestion</code> mounts the same.</li>
 </ul>
@@ -154,8 +157,9 @@ path</strong> — they never download at runtime. Offline verification
 (<code>docs/runbook.md</code> §4): with external network blocked, every service
 must start cleanly and serve.</p>
 <h2 id="smoke-tests-post-bring-up">Smoke tests (post bring-up)</h2>
-<pre><code class="language-bash"># Gateway rejects unauthenticated requests
-curl -s -o /dev/null -w &quot;%{http_code}\n&quot; http://localhost:8080/healthz   # expect 401/403
+<pre><code class="language-bash"># Gateway rejects unauthenticated requests (gateway is internal-only;
+# exec into the container since no host port is published)
+docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w &quot;%{http_code}\n&quot; http://localhost:8000/healthz   # expect 401/403
 
 # Milvus collection exists with the alias
 # via milvus_setup logs or: utility.has_collection(&quot;project_knowledge_base_v1&quot;)
