@@ -9,6 +9,7 @@ Staging-workstation only. Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -20,19 +21,25 @@ from .artifact_manifest import (
     verify_checksums,
 )
 
+log = logging.getLogger(__name__)
+
 
 def _cmd_validate(args: argparse.Namespace) -> int:
     try:
         manifest = load_manifest(args.manifest)
         warnings = validate_manifest(manifest)
     except ManifestError as exc:
+        log.error("manifest INVALID: %s", exc)
+        # Verdict line: the CLI result payload (stderr, exit code 1).
         print(f"INVALID: {exc}", file=sys.stderr)
         return 1
     for warning in warnings:
-        print(f"WARNING: {warning}")
+        log.warning("manifest warning: %s", warning)
     if args.check_redirects:
         for warning in check_redirects(manifest):
-            print(f"WARNING: {warning}")
+            log.warning("redirect warning: %s", warning)
+    log.info("manifest valid: %s", manifest.artifact_name)
+    # Verdict line: the CLI result payload (stdout, exit code 0).
     print(f"OK: {manifest.artifact_name} manifest is valid")
     return 0
 
@@ -42,18 +49,32 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         manifest = load_manifest(args.manifest)
         validate_manifest(manifest)
     except ManifestError as exc:
+        log.error("manifest INVALID: %s", exc)
+        # Verdict line: the CLI result payload (stderr, exit code 1).
         print(f"INVALID: {exc}", file=sys.stderr)
         return 1
     errors = verify_checksums(manifest, args.root)
     if errors:
         for error in errors:
+            log.error("checksum FAILED: %s", error)
+            # Verdict lines: the CLI result payload (stderr, exit code 1).
             print(f"FAILED: {error}", file=sys.stderr)
         return 1
+    log.info(
+        "checksums verified: %d files for %s",
+        len(manifest.files),
+        manifest.artifact_name,
+    )
+    # Verdict line: the CLI result payload (stdout, exit code 0).
     print(f"OK: all {len(manifest.files)} staged files verified for {manifest.artifact_name}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = argparse.ArgumentParser(description="new_DRUID artifact manifest tooling")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -72,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.set_defaults(func=_cmd_verify)
 
     args = parser.parse_args(argv)
+    log.info(
+        "starting artifacts cli: command=%s manifest=%s",
+        args.command,
+        args.manifest,
+    )
     return args.func(args)
 
 

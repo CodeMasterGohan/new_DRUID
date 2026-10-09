@@ -1,0 +1,43 @@
+# RESEARCH-COMPLETED DRAFT — olmOCR 2 FP8 (production visual checkpoint, §8/§10).
+# Completed 2026-10-08 by Finch from the HuggingFace Hub API (no weights downloaded).
+# Pinned upstream_revision and all LFS-file sha256 are authoritative for that
+# revision. Zeroed sha256 entries (0000...) are small git-stored files whose
+# checksums MUST be recorded at controlled staging (§3 steps 1-5) with:
+#   sha256sum <file>   (after downloading the pinned revision only)
+# Approval record is pending James's sign-off. Re-verify every hash at staging.
+artifact_manifest:
+  artifact_name: "allenai/olmOCR-2-7B-1025-FP8"
+  upstream_source: "https://huggingface.co/allenai/olmOCR-2-7B-1025-FP8"
+  upstream_revision: "40bd7202494b8264ee17ada08b401b5aab7a9ce1"
+  internal_location: "/models/allenai/olmOCR-2-7B-1025-FP8"
+  license: "Apache-2.0"
+  files:
+    - path: "model-00001-of-00003.safetensors"
+      sha256: "5d5550dbb21e309786fde9a151442181562cf9dc23141116a4e46e3e815b0d02"
+    - path: "model-00002-of-00003.safetensors"
+      sha256: "65cb798f6478260b7eba5120cba2041ca252d3f94c9a2e32cc7fba16231f0c4a"
+    - path: "model-00003-of-00003.safetensors"
+      sha256: "4a185c74b8147aff33829d1d7384e2781c8dd09461d50499afbd1d80a13e7e1a"
+    - path: "model.safetensors.index.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "tokenizer.json"
+      sha256: "9c5ae00e602b8860cbd784ba82a8aa14e8feecec692e7076590d014d7b7fdafa"
+    - path: "tokenizer_config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "added_tokens.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "special_tokens_map.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "merges.txt"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "vocab.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "preprocessor_config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "generation_config.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    - path: "chat_template.json"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  approval_record: "APPROVAL-2026-001"

@@ -63,6 +63,10 @@ plan exceeds host RAM, the choices are: bigger host, Matryoshka truncation
 ```bash
 cp .env.example .env   # fill secrets
 
+# 0. Shared network for cross-project DNS (ingestion workers → vLLM).
+#    Both compose projects attach to it as external. Create once per host.
+docker network create druid-net
+
 # 1. Infrastructure
 docker compose -f deploy/docker-compose.yml up -d postgres redis minio etcd milvus
 

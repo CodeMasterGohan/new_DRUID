@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.artifact_manifest import (
+from services.artifacts.src.artifact_manifest import (
     ArtifactManifest,
     ManifestError,
     ManifestFile,

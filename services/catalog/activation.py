@@ -22,8 +22,10 @@ Activation is a single transactional check-and-swap:
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 import uuid
+from typing import NoReturn
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -38,6 +40,8 @@ from .models import (
     ParserRevisionStats,
     ReviewQuarantineItem,
 )
+
+log = logging.getLogger(__name__)
 
 
 def get_expected_chunk_range(
@@ -106,36 +110,49 @@ def activate_version(
 
     repo = CatalogRepository(session, context)  # validates the context, fail closed
     version = repo.get_version(version_id)  # tenant-scoped; NotFoundError if foreign
+    log.info(
+        "activation start: version=%s document=%s group=%s",
+        version_id,
+        version.document_id,
+        context.group_id,
+    )
+
+    def _reject(reason: str) -> NoReturn:
+        log.warning("activation rejected: version=%s: %s", version_id, reason)
+        raise ActivationError(reason)
 
     # Quarantine is checked first so a version parked for review reports the
     # actionable reason (unreviewed pages) rather than a generic status
     # mismatch — unreviewed pages must never become searchable.
     pending = pending_review_pages(session, version.id)
     if pending:
-        raise ActivationError(
+        _reject(
             f"version {version_id} has {pending} unreviewed quarantine page(s); "
             f"unreviewed pages must not become searchable"
         )
 
     if version.status != IngestionState.INDEXING:
-        raise ActivationError(
+        _reject(
             f"version {version_id} is {version.status.value}, not INDEXING; "
             f"only fully indexed versions may be activated"
         )
     if version.chunk_count_actual is None:
-        raise ActivationError(
+        _reject(
             f"version {version_id} has no recorded chunk count; refusing to activate"
         )
 
-    lo, hi = get_expected_chunk_range(
-        session,
-        parser=version.parser,
-        parser_revision=version.parser_revision,
-        page_count=version.page_count,
-    )
+    try:
+        lo, hi = get_expected_chunk_range(
+            session,
+            parser=version.parser,
+            parser_revision=version.parser_revision,
+            page_count=version.page_count,
+        )
+    except ActivationError as exc:
+        _reject(str(exc))
     actual = version.chunk_count_actual
     if not (lo <= actual <= hi):
-        raise ActivationError(
+        _reject(
             f"version {version_id} chunk count {actual} outside plausible range "
             f"[{lo}, {hi}] for parser {version.parser!r} revision "
             f"{version.parser_revision!r}; investigate before activating"
@@ -147,7 +164,7 @@ def activate_version(
         .one()
     )
     if document.is_deleted:
-        raise ActivationError(f"document {document.id} is deleted; cannot activate")
+        _reject(f"document {document.id} is deleted; cannot activate")
 
     # Check-and-swap: deactivate the previous active version first so there is
     # never more than one active version per document.
@@ -161,13 +178,23 @@ def activate_version(
         .scalars()
         .all()
     )
+    deactivated = 0
     for old in previous:
         if old.id != version.id:
             old.is_active = False
+            deactivated += 1
 
     version.is_active = True
     version.status = IngestionState.READY
     version.activated_at = dt.datetime.now(dt.timezone.utc)
     document.active_version_id = version.id
     session.flush()
+    log.info(
+        "activation complete: version=%s → READY document=%s group=%s "
+        "(deactivated %d previous)",
+        version_id,
+        document.id,
+        context.group_id,
+        deactivated,
+    )
     return version
