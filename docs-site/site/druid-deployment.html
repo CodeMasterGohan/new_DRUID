@@ -114,7 +114,7 @@ docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://
   <code>test_only_allowlisted_services_publish_host_ports</code>.
   Compose service names use underscores (<code>document_api</code>,
   <code>mcp_server</code>).</li>
-<li><code>embedding</code> and <code>retrieval</code> mount <code>${MODEL_DIR:-/models}:/models:ro</code>
+<li><code>embedding</code> and <code>retrieval</code> mount <code>${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro</code>
   (read-only); <code>ingestion</code> mounts the same.</li>
 </ul>
 <h2 id="gpu-arbitration-2">GPU arbitration (§2)</h2>
@@ -139,8 +139,8 @@ consumer requires re-validation of this policy.</p>
 </ul>
 <h2 id="model-staging-artifact-manifests">Model staging (artifact manifests)</h2>
 <p>Before any service starts, the host registry at <code>$MODEL_DIR</code> (default
-<code>/models</code>) must contain the three approved checkpoints, each completed
-per its manifest in <code>services/artifacts/manifests/</code>:</p>
+<code>/DATA/docker/mounts/models</code>) must contain the three approved checkpoints,
+each completed per its manifest in <code>services/artifacts/manifests/</code>:</p>
 <ul>
 <li><code>allenai/olmOCR-2-7B-1025-FP8</code></li>
 <li><code>google/embeddinggemma-2</code></li>

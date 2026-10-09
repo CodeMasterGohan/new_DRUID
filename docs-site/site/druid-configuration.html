@@ -236,22 +236,22 @@ by the operator (see <a href="druid-web-ui.html">Web UI</a>).</p>
 <tbody>
 <tr>
 <td><code>MODEL_DIR</code></td>
-<td><code>/models</code></td>
+<td><code>/DATA/docker/mounts/models</code></td>
 <td>Host artifact registry; mounted <code>:ro</code> into embedding, retrieval, ingestion, vLLM</td>
 </tr>
 <tr>
 <td><code>OLMOCR_MODEL_DIR</code></td>
-<td><code>/models/allenai/olmOCR-2-7B-1025-FP8</code></td>
+<td><code>/DATA/docker/mounts/models/allenai/olmOCR-2-7B-1025-FP8</code></td>
 <td>FP8 production checkpoint</td>
 </tr>
 <tr>
 <td><code>EMBEDDING_MODEL_DIR</code></td>
-<td><code>/models/google/embeddinggemma-2</code></td>
+<td><code>/DATA/docker/mounts/models/google/embeddinggemma-2</code></td>
 <td>Fallback alias; see next row</td>
 </tr>
 <tr>
 <td><code>EMBEDDING_MODEL_PATH</code></td>
-<td><code>/models/google/embeddinggemma-2</code></td>
+<td><code>/DATA/docker/mounts/models/google/embeddinggemma-2</code></td>
 <td><strong>Primary</strong> name the embedding service reads</td>
 </tr>
 <tr>
@@ -271,12 +271,12 @@ by the operator (see <a href="druid-web-ui.html">Web UI</a>).</p>
 </tr>
 <tr>
 <td><code>RERANKER_MODEL_DIR</code></td>
-<td><code>/models/cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
+<td><code>/DATA/docker/mounts/models/cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
 <td>MiniLM reranker</td>
 </tr>
 <tr>
 <td><code>MINILM_TOKENIZER_PATH</code></td>
-<td><code>/models/cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
+<td><code>/DATA/docker/mounts/models/cross-encoder/ms-marco-MiniLM-L6-v2</code></td>
 <td>Tokenizer the ingestion chunker enforces its token budget with (fail-closed); separate var because the chunker needs only the tokenizer</td>
 </tr>
 <tr>
