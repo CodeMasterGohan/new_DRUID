@@ -19,6 +19,7 @@ application layer and never relies on Milvus index/compaction state.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 
 from sqlalchemy import func, select
@@ -41,6 +42,8 @@ from .models import (
     ReviewQuarantineItem,
     Tenant,
 )
+
+log = logging.getLogger(__name__)
 
 # Statuses that may never appear in search results, even if some other flag
 # were wrong. READY is the only searchable state; the query below also
@@ -192,6 +195,12 @@ class CatalogRepository:
         doc.is_deleted = True
         doc.deleted_at = dt.datetime.now(dt.timezone.utc)
         self.session.flush()
+        log.info(
+            "document soft-deleted: document=%s group=%s request_id=%s",
+            document_id,
+            self.context.group_id,
+            self.context.request_id,
+        )
         return doc
 
     # ------------------------------------------------------------------
@@ -353,6 +362,14 @@ class CatalogRepository:
         )
         self.session.add(job)
         self.session.flush()
+        log.info(
+            "job created: job=%s type=%s document=%s version=%s group=%s",
+            job.id,
+            job_type,
+            document_id,
+            document_version_id,
+            self.context.group_id,
+        )
         return job
 
     def get_job(self, job_id: uuid.UUID) -> Job:
@@ -477,6 +494,15 @@ class CatalogRepository:
         if version.status != IngestionState.REVIEW_REQUIRED:
             version.status = IngestionState.REVIEW_REQUIRED
             self.session.flush()
+        log.info(
+            "page quarantined: item=%s document=%s version=%s page=%d job=%s group=%s",
+            item.id,
+            document_id,
+            document_version_id,
+            page_index,
+            job_id,
+            self.context.group_id,
+        )
         return item
 
     def get_quarantine_item(self, item_id: uuid.UUID) -> ReviewQuarantineItem:
@@ -534,6 +560,13 @@ class CatalogRepository:
         item.reviewed_by = reviewed_by
         item.reviewed_at = dt.datetime.now(dt.timezone.utc)
         self.session.flush()
+        log.info(
+            "quarantine resolved: item=%s decision=%s reviewed_by=%s group=%s",
+            item_id,
+            decision,
+            reviewed_by,
+            self.context.group_id,
+        )
         return item
 
     def pending_quarantine_count(self, version_id: uuid.UUID) -> int:
@@ -610,3 +643,84 @@ class CatalogRepository:
             and row.permission == permission
             for row in rows
         )
+
+    # ------------------------------------------------------------------
+    # admin (cross-tenant operator reads)
+    # ------------------------------------------------------------------
+    # SECURITY: these methods deliberately bypass the tenant predicate.
+    # Every caller MUST enforce the ``admin`` role before invoking them —
+    # they are only reachable via the document_api ``/v1/admin/*`` routes,
+    # which gate on the JWT ``roles`` claim. Never expose them on a
+    # tenant-scoped route.
+
+    def list_all_documents(
+        self,
+        *,
+        tenant_name: str | None = None,
+        status: IngestionState | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[tuple[Document, str, IngestionState | None]]:
+        """Cross-tenant document list for operators.
+
+        Returns ``(document, tenant_name, latest_version_status)`` rows,
+        newest first. ``status`` filters on the document's *latest* version
+        status (a fresh upload's version is UPLOADED long before it becomes
+        the active version, so latest-version status is the useful operator
+        signal). Documents with no versions have ``None`` status and are
+        excluded when a status filter is given.
+        """
+        latest_version = (
+            select(
+                DocumentVersion.document_id.label("document_id"),
+                func.max(DocumentVersion.version_number).label("max_version_number"),
+            )
+            .group_by(DocumentVersion.document_id)
+            .subquery("latest_version")
+        )
+        stmt = (
+            select(Document, Tenant.name, DocumentVersion.status)
+            .join(Tenant, Document.tenant_id == Tenant.id)
+            .outerjoin(
+                latest_version, latest_version.c.document_id == Document.id
+            )
+            .outerjoin(
+                DocumentVersion,
+                (DocumentVersion.document_id == Document.id)
+                & (
+                    DocumentVersion.version_number
+                    == latest_version.c.max_version_number
+                ),
+            )
+            .where(Document.is_deleted.is_(False))
+            .order_by(Document.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        if tenant_name is not None:
+            stmt = stmt.where(Tenant.name == tenant_name)
+        if status is not None:
+            stmt = stmt.where(DocumentVersion.status == status)
+        return list(self.session.execute(stmt).all())
+
+    def list_all_jobs(
+        self, *, tenant_name: str | None = None, limit: int = 100, offset: int = 0
+    ) -> list[tuple[Job, str]]:
+        """Cross-tenant job list for operators, newest first."""
+        stmt = (
+            select(Job, Tenant.name)
+            .join(Tenant, Job.tenant_id == Tenant.id)
+            .order_by(Job.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        if tenant_name is not None:
+            stmt = stmt.where(Tenant.name == tenant_name)
+        return list(self.session.execute(stmt).all())
+
+    def list_tenant_names(self, *, active_only: bool = True) -> list[str]:
+        """All tenant names (``group_id`` claim values), alphabetical."""
+        stmt = select(Tenant.name).order_by(Tenant.name)
+        if active_only:
+            stmt = stmt.where(Tenant.is_active.is_(True))
+        return list(self.session.execute(stmt).scalars().all())
