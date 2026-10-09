@@ -58,6 +58,26 @@ Limits: `MAX_UPLOAD_MB` (default 200) → **413**; `MAX_PAGES_PER_DOCUMENT`
 (default 2000) → **400**. Allowed MIME types: `application/pdf`,
 `image/png`, `image/jpeg`, `image/tiff`.
 
+### `POST /v1/documents/register` → 201
+
+Two-phase upload, step 1: declare the upload (display name, MIME, byte
+size, SHA-256). Server validates the declaration (name sanitizing, MIME
+allowlist, size cap → **413**, SHA-256 shape → **400**), creates the
+document record + durable ingestion job in `UPLOADED` (not yet enqueued —
+no bytes exist), and issues a **single-use upload ticket** (TTL
+`upload_ticket_ttl_seconds`, default 900s). The ticket is redeemed in
+step 2; it is the authorization the MCP `ingest_document` tool returns.
+
+### `POST /v1/documents/{document_id}/bytes` → 200
+
+Two-phase upload, step 2: redeem the ticket and send the bytes (multipart,
+ticket as form field). Constant-time ticket compare, TTL check, single-use:
+wrong ticket → **403**, consumed → **409**, expired → **410**. Bytes must
+match the declared size and SHA-256 exactly (**400** otherwise); sniffed
+MIME must agree with the declared one. From version creation onward the
+flow mirrors the single-shot upload (tenant-scoped RustFS key,
+commit-before-enqueue, enqueue failure parks the job `FAILED`).
+
 ### `GET /v1/documents`
 
 Tenant-scoped list. Query params:
@@ -84,6 +104,15 @@ Response `DeleteResponse`: `{document_id, job_id, status}`.
 
 Job status for the document's **active version** ingestion job:
 `{job_id, job_type, state, document_id, document_version_id}`.
+
+## Job routes
+
+### `GET /v1/jobs/{job_id}` → 200
+
+Status of any job by id, tenant-scoped (cross-tenant reads as **404**,
+never 403). Reuses the job status shape: `{job_id, job_type, state,
+attempt_count, error}` with the error excerpt truncated to 500 chars.
+Unknown job → **404**. Unauthenticated → **401**.
 
 ## Review routes
 
