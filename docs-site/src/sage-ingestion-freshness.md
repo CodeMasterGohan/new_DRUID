@@ -172,8 +172,13 @@ the loop — it logs the error and backs off exponentially (interval ×
 trigger: `docker compose run --rm scheduler python -m scheduler.run
 --once` (exit 0 ok / 1 sweep failed / 2 bad config).
 
-**Remaining gap:** the monthly `devdocs_sync` has no scheduler yet —
-`devdocs_sync` without an explicit manifest raises `NotImplementedError`
-(real DevDocs image-manifest parsing is still an open gap in the crawler),
-so there is nothing schedulable to call. It stays a manual job until that
-gap closes.
+The monthly sync is driven by a second compose service,
+**`devdocs-scheduler`** (same image, `SCHEDULER_JOB=devdocs_sync`,
+`REFRESH_INTERVAL_SECONDS=2592000` = 30 days). It only *enqueues* one
+`devdocs_sync` RQ job per month — the crawler worker does the hours-long
+image pull and re-ingestion. Manual trigger:
+`python -m scheduler.run --once --job devdocs_sync`. The sync reads the
+approved seed manifest (`DEVDOCS_MANIFEST_PATH`, digest-pinned),
+re-resolves `:latest`, stages the image without executing it, diffs
+`{docset: version}` against the catalog, and ingests only changed/added
+docsets; removed docsets stay searchable (catalog is append-only).

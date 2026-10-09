@@ -11,6 +11,9 @@ request and fails closed without it (§4).
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/v1/documents/upload` | Multipart upload → validate → store → catalog → enqueue ingestion. Returns `{document_id, job_id, status}` |
+| `POST` | `/v1/documents/register` | Two-phase upload, step 1: validate the file declaration → reserve the catalog record + ingestion job → issue a single-use upload ticket. Returns `{document_id, job_id, upload_ticket, expires_in_seconds}` (201) |
+| `POST` | `/v1/documents/{id}/bytes` | Two-phase upload, step 2: redeem the ticket with the multipart bytes → verify against the declaration → store → enqueue ingestion. Returns `{document_id, job_id, status}` |
+| `GET` | `/v1/jobs/{job_id}` | Tenant-scoped job status: state, type, attempts, error excerpt, timestamps. Cross-tenant reads as 404 |
 | `GET` | `/v1/documents` | List tenant documents (`?review_required=`, `?limit=`, `?offset=`) |
 | `GET` | `/v1/documents/{id}` | Metadata + versions + artifact references (presigned URLs) |
 | `DELETE` | `/v1/documents/{id}` | Authorize, enqueue complete deletion job (202) |
@@ -19,6 +22,41 @@ request and fails closed without it (§4).
 | `GET` | `/v1/review/items/{item_id}` | Full quarantine record: render, parse attempts, diagnostics |
 | `POST` | `/v1/review/items/{item_id}/resolve` | accept / re-route / reject (**reviewer** role required) |
 | `GET` | `/healthz` | Liveness |
+
+## Two-phase upload: ticket registration + redemption (§5)
+
+The MCP server's `ingest_document` tool deliberately never holds file
+bytes, so a caller that only has a file *declaration* (name, MIME, size,
+SHA-256) cannot use the single-shot `POST /v1/documents/upload`. The
+two-phase flow closes that gap:
+
+1. `POST /v1/documents/register` takes the JSON declaration, validates it
+   (display-name sanitizing, MIME allowlist, size cap, SHA-256 shape),
+   creates the catalog document record and the durable ingestion job in
+   state `UPLOADED` (**not** enqueued — no bytes exist yet), and returns a
+   single-use upload ticket (`upload_ticket_ttl_seconds`, default 900s).
+2. The caller uploads the bytes with `POST /v1/documents/{id}/bytes`
+   (multipart `file` + form field `upload_ticket`). The ticket is
+   constant-time-compared, TTL-bound, and pinned to the tenant, document,
+   and declaration; the bytes must match the declared size and SHA-256
+   exactly, and the sniffed MIME type must agree with the declared one.
+   On success the version record is created, bytes are stored under the
+   tenant-scoped key, the ticket is marked consumed, and the registration
+   job is promoted to a real ingestion job and enqueued — from there the
+   flow is identical to the single-shot upload (commit before enqueue;
+   enqueue failure parks the job as `FAILED`).
+
+Design decision (2026-10-09): the ticket is a *real* authorization token
+for the byte-upload step, not just an idempotency-slot reservation. An
+idempotency slot alone would have nothing to redeem it — the single-shot
+upload route creates its own document/version/job and takes no ticket —
+whereas the register-then-redeem split is exactly what the MCP
+`IngestionServiceClient` ABC (`register_upload` → `UploadTicket`,
+`get_job_status` by `job_id`) was written against. Ticket state lives on
+the job row's payload (no new table / migration); wrong ticket → 403,
+consumed → 409, expired → 410. Quota enforcement stays at the gateway
+(§4), mirroring the single-shot upload route, which performs no quota
+accounting itself.
 
 ## Upload validation (§5)
 
@@ -53,7 +91,7 @@ request closed with 401.
 ## Layout
 
 - `main.py` — `create_app()` factory + `app` (uvicorn `main:app`)
-- `routes/documents.py`, `routes/review.py` — endpoint handlers
+- `routes/documents.py`, `routes/review.py`, `routes/jobs.py` — endpoint handlers
 - `internal_auth.py` — HMAC verification / trusted context
 - `deps.py` — settings, sessions, repository, object store wiring
 - `storage.py` — `ObjectStore` ABC, `MemoryObjectStore`, `RustFSObjectStore`
@@ -67,5 +105,5 @@ request closed with 401.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest tests/ -q   # 34 passed
+.venv/bin/python -m pytest tests/ -q   # 71 passed
 ```

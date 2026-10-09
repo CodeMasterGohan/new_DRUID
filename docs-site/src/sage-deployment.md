@@ -128,9 +128,10 @@ sweep (`refresh_stale`) and a **monthly** DevDocs image sync (`devdocs_sync`).
 The weekly sweep is driven by the **`scheduler` compose service**
 (`services/scheduler/`): it calls `refresh_stale()` in-process once per
 `REFRESH_INTERVAL_SECONDS` (default 7 days), with startup jitter and
-failure backoff. The monthly DevDocs sync is still manual — its
-image-manifest parsing is an open gap in the crawler. Details and current
-status:
+failure backoff. The monthly sync is driven by a second compose service,
+**`devdocs-scheduler`** (same image, `SCHEDULER_JOB=devdocs_sync`, 30-day
+cadence), which enqueues one `devdocs_sync` RQ job per month for the
+crawler worker. Details and current status:
 [sage-ingestion-freshness.html](sage-ingestion-freshness.html).
 
 ## MCP client wiring
@@ -153,5 +154,3 @@ to localhost / the Tailscale interface instead.
 - `pymilvus` is pinned inconsistently across images (2.4.6 in
   ingestion/crawler vs 2.5.6 in retrieval/milvus_setup) — flagged for
   unification at deploy time.
-- DevDocs image-manifest parsing is a stub; the monthly sync needs an
-  explicit manifest or the parsing gap closed.
