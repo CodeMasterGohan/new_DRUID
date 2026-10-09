@@ -100,7 +100,7 @@ convention, aligned across gateway, MCP server, and siblings).</p>
 </tbody>
 </table>
 <p>Image: <code>redis:7.4.2-alpine</code> with <code>--appendonly yes</code>.</p>
-<h2 id="minio-tenant-scoped-object-storage">MinIO (tenant-scoped object storage)</h2>
+<h2 id="rustfs-s3-compatible-object-storage">RustFS (S3-compatible object storage)</h2>
 <table>
 <thead>
 <tr>
@@ -111,30 +111,30 @@ convention, aligned across gateway, MCP server, and siblings).</p>
 </thead>
 <tbody>
 <tr>
-<td><code>MINIO_ROOT_USER</code></td>
+<td><code>RUSTFS_ACCESS_KEY</code></td>
 <td><code>druid</code></td>
 <td></td>
 </tr>
 <tr>
-<td><code>MINIO_ROOT_PASSWORD</code></td>
+<td><code>RUSTFS_SECRET_KEY</code></td>
 <td><code>change-me-min-8-chars</code></td>
 <td><strong>Secret</strong> (min 8 chars)</td>
 </tr>
 <tr>
-<td><code>MINIO_ENDPOINT</code></td>
-<td><code>minio:9000</code></td>
+<td><code>RUSTFS_ENDPOINT</code></td>
+<td><code>rustfs:9000</code></td>
 <td></td>
 </tr>
 <tr>
-<td><code>MINIO_BUCKET</code></td>
+<td><code>RUSTFS_BUCKET</code></td>
 <td><code>druid-artifacts</code></td>
 <td></td>
 </tr>
 </tbody>
 </table>
-<p>Milvus shares this MinIO (separate bucket) instead of running its own.
-Image tag is <code>minio/minio:latest</code> — pin a dated RELEASE tag at deploy
-(see <a href="druid-troubleshooting.html">Troubleshooting</a>).</p>
+<p>Milvus shares this RustFS (separate bucket) instead of running its own.
+Image is <code>rustfs/rustfs:1.0.1</code> (pinned). The <code>minio</code> Python client works
+against it unmodified.</p>
 <h2 id="milvus">Milvus</h2>
 <table>
 <thead>

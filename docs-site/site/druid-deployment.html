@@ -63,7 +63,7 @@ lockfiles (regenerate with <code>pip-compile</code> before release).</p>
 docker network create druid-net
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d postgres redis minio etcd milvus
+docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
 
 # 2. Schema + migrations (one-shot jobs, must exit 0)
 docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
@@ -91,7 +91,7 @@ curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
 <tr>
 <td><code>druid</code> (CPU)</td>
 <td><code>deploy/docker-compose.yml</code></td>
-<td>postgres, redis, minio, etcd, milvus, one-shot catalog + milvus_setup, gateway, document_api, mcp_server, web_ui, embedding, retrieval, ingestion (scalable)</td>
+<td>postgres, redis, rustfs, etcd, milvus, one-shot catalog + milvus_setup, gateway, document_api, mcp_server, web_ui, embedding, retrieval, ingestion (scalable)</td>
 <td>Container images are <code>python:3.11-slim</code> builds from each service dir</td>
 </tr>
 <tr>
@@ -155,7 +155,7 @@ path</strong> — they never download at runtime. Offline verification
 must start cleanly and serve.</p>
 <h2 id="smoke-tests-post-bring-up">Smoke tests (post bring-up)</h2>
 <pre><code class="language-bash"># Gateway rejects unauthenticated requests
-curl -s -o /dev/null -w &quot;%{http_code}\n&quot; http://localhost:8000/healthz   # expect 401/403
+curl -s -o /dev/null -w &quot;%{http_code}\n&quot; http://localhost:8080/healthz   # expect 401/403
 
 # Milvus collection exists with the alias
 # via milvus_setup logs or: utility.has_collection(&quot;project_knowledge_base_v1&quot;)
@@ -172,7 +172,7 @@ curl http://localhost:8000/v1/models   # expect served-model-name olmocr-2-fp8
   ~0.5–1.0 KB + BM25 ~1–2 KB + metadata ~2–4 KB); per page-image record
   ≈ 4 KB.</li>
 <li>Worked example (5M chunks + 200K page images): Milvus ≈ 43 GB,
-  PostgreSQL ≈ 5 GB, MinIO sized from corpus × 2 headroom, vLLM host-side
+  PostgreSQL ≈ 5 GB, RustFS sized from corpus × 2 headroom, vLLM host-side
   ≈ 4 GB, OS page cache + headroom ≈ 16 GB → <strong>≥ 96 GB host RAM
   (128 GB comfortable)</strong>. GPU memory is not part of this budget.</li>
 <li>Scaling rule of thumb: ~8 KB host RAM per text chunk (10M chunks ≈

@@ -69,8 +69,8 @@
 <td>Full catalog: tenants, documents, versions, jobs, review quarantine</td>
 </tr>
 <tr>
-<td>MinIO</td>
-<td><code>mc mirror</code> to a second MinIO / filesystem target</td>
+<td>RustFS</td>
+<td><code>rclone sync</code> (S3 remote) to a second RustFS / filesystem target</td>
 <td>Originals, page renders, parsed trees, markdown, provenance</td>
 </tr>
 </tbody>
@@ -84,13 +84,13 @@ not rely on that.</p>
 <ul>
 <li>Milvus: nightly <code>milvus-backup create</code>, retain 7 days.</li>
 <li>PostgreSQL: continuous WAL archiving + weekly base backup, retain 4 weeks.</li>
-<li>MinIO: continuous <code>mc mirror --watch</code>, plus nightly snapshot, retain 30 days.</li>
+<li>RustFS: scheduled <code>rclone sync</code> to the replica target, plus nightly snapshot, retain 30 days.</li>
 </ul>
 <h3 id="restore-procedure">Restore procedure</h3>
 <ol>
-<li>Stop all services except the infrastructure (<code>postgres</code>, <code>minio</code>, <code>milvus</code>).</li>
+<li>Stop all services except the infrastructure (<code>postgres</code>, <code>rustfs</code>, <code>milvus</code>).</li>
 <li>Restore PostgreSQL from base backup + WAL to the backup timestamp T.</li>
-<li>Restore MinIO objects to T.</li>
+<li>Restore RustFS objects to T.</li>
 <li>Restore Milvus collections with <code>milvus-backup restore</code> to T.</li>
 <li>Run <code>milvus_setup</code> in <strong>verify mode</strong> (must confirm, not recreate):
    the alias <code>project_knowledge_base</code> resolves and the collection schema
@@ -111,7 +111,7 @@ not rely on that.</p>
 </ul>
 <h3 id="rto-rpo-targets-initial-tune-after-first-drill">RTO / RPO targets (initial, tune after first drill)</h3>
 <ul>
-<li>RPO ≤ 24 h (nightly Milvus/PG backups; MinIO continuous).</li>
+<li>RPO ≤ 24 h (nightly Milvus/PG backups; RustFS continuous).</li>
 <li>RTO ≤ 4 h for full restore on equivalent hardware.</li>
 </ul>
 <h3 id="deletion-interplay-12">Deletion interplay (§12)</h3>
