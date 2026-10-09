@@ -32,7 +32,7 @@ docker compose -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
 
 # 4. GPU plane (H200 host only)
 docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
-curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
+docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
 ```
 
 ## Compose projects
@@ -46,11 +46,14 @@ Notable wiring (all verified by `tests/test_deploy_wiring.py`):
 
 - `druid-net` is declared **external** in both files and attached to
   `ingestion` and `vllm-olmocr` so workers resolve `vllm-olmocr` by
-  service name.
-- Gateway host port is **8080** (`GATEWAY_PORT`; container still listens
-  on 8000) because vLLM binds host port 8000 on the same machine.
+  service name. All three compose files also attach every service to the
+  pre-existing external `cora` network (additive; project networks kept).
+- Host-port policy (2026-10-09): only `web_ui` (8005, browser) and
+  `mcp_server` (8002, AI CLI) publish host ports; everything else is
+  container-to-container. Enforced by
+  `test_only_allowlisted_services_publish_host_ports`.
   Compose service names use underscores (`document_api`,
-  `mcp_server`) — gateway defaults were corrected to match.
+  `mcp_server`).
 - `embedding` and `retrieval` mount `${MODEL_DIR:-/models}:/models:ro`
   (read-only); `ingestion` mounts the same.
 
@@ -101,8 +104,9 @@ must start cleanly and serve.
 ## Smoke tests (post bring-up)
 
 ```bash
-# Gateway rejects unauthenticated requests
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/healthz   # expect 401/403
+# Gateway rejects unauthenticated requests (gateway is internal-only;
+# exec into the container since no host port is published)
+docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 401/403
 
 # Milvus collection exists with the alias
 # via milvus_setup logs or: utility.has_collection("project_knowledge_base_v1")

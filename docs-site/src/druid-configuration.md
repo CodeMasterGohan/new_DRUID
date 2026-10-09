@@ -87,24 +87,24 @@ by the operator (see [Web UI](druid-web-ui.html)).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `OLMOCR_VLLM_URL` | `http://vllm-olmocr:8000` | Base URL of the vLLM OpenAI-compatible endpoint; read by ingestion workers; resolves via shared `druid-net` |
-| `VLLM_PORT` | `8000` | Host-side port of the vLLM endpoint |
+| `OLMOCR_VLLM_URL` | `http://vllm-olmocr:8000` | Base URL of the vLLM OpenAI-compatible endpoint; read by ingestion workers; resolves via shared `druid-net` (container-to-container; no host port) |
 | `VLLM_GPU_MEMORY_UTILIZATION` | `0.7` | Initial cap; tune against KV-cache pressure |
 | `VLLM_MAX_MODEL_LEN` | `8192` | |
 
 ## Service ports
 
+Host-port policy (2026-10-09): only `WEB_UI_PORT` (8005, browser) and
+`MCP_PORT` (8002, AI CLI) publish host ports. Everything else is
+container-to-container — the remaining `*_PORT` variables were removed from
+`.env.example`.
+
 | Variable | Default | Notes |
 |---|---|---|
-| `GATEWAY_PORT` | `8080` | Host mapping; container listens on 8000. **Must not collide with `VLLM_PORT`** — both compose projects run on the same host |
-| `DOCUMENT_API_PORT` | `8001` | |
-| `MCP_PORT` | `8002` | |
-| `EMBEDDING_PORT` | `8003` | |
-| `RETRIEVAL_PORT` | `8004` | |
-| `WEB_UI_PORT` | `8005` | |
+| `MCP_PORT` | `8002` | Host mapping for the AI CLI |
+| `WEB_UI_PORT` | `8005` | Host mapping for browser access |
 
-Container-internal ports are the un-prefixed values; only the host-side
-mapping moves (documented in the template).
+Container-internal ports: gateway 8000, document_api 8001, embedding 8003,
+retrieval 8004, vLLM 8000, RustFS 9000/9001, Milvus 19530/9091.
 
 ## Service URLs (compose DNS — service names use underscores)
 

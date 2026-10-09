@@ -37,14 +37,14 @@ module layout first.
 
 ## Port and network collisions
 
-### Host port collision: gateway vs vLLM
+### Host port collision: gateway vs vLLM (historical)
 
 The original `.env.example` set `GATEWAY_PORT=8000` and `VLLM_PORT=8000`
-on the same H200 host — both compose projects bind the host port. The
-fix: `GATEWAY_PORT=8080` (container still listens on 8000; only the host
-mapping moved). A deploy-wiring test asserts no host-port collision
-across the two compose projects. If services fail to bind, check this
-first.
+on the same H200 host — both compose projects bound the host port. This was
+first fixed with `GATEWAY_PORT=8080`, then superseded 2026-10-09 by the
+host-port minimization policy: neither publishes a host port anymore
+(container-to-container only). If services fail to bind, check the
+allowlist test `test_only_allowlisted_services_publish_host_ports` first.
 
 ### Ingestion workers can't reach vLLM
 
@@ -166,7 +166,7 @@ hand; build the corpus first.
 3. Model checkpoints staged at `$MODEL_DIR` per the manifests.
 4. One-shot `catalog` + `milvus_setup` jobs exit 0 before starting
    services.
-5. No host-port collision across compose projects (gateway 8080, vLLM
-   8000, document_api 8001, mcp_server 8002, embedding 8003, retrieval
-   8004, web_ui 8005).
+5. Only the allowlisted host ports are published (web_ui 8005, DRUID
+   mcp_server 8002, SAGE mcp-server 8010) — enforced by
+   `test_only_allowlisted_services_publish_host_ports`.
 6. Burn in quotas before production traffic.

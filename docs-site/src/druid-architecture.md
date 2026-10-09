@@ -6,25 +6,25 @@ DNS (ingestion workers → `vllm-olmocr`).
 
 ```
 clients (Web UI / AI agent / CLI / browser)
-  → gateway (JWT auth, quotas, HMAC-signed identity) ── port 8080 host / 8000 container
-      → document_api (upload / status / list / delete / review / admin) ── 8001
-      → mcp_server (FastMCP Streamable HTTP /mcp, 8 tools) ── 8002
-  → web_ui (FastAPI + Jinja2 + vendored htmx; thin UI over gateway only) ── 8005
+  → gateway (JWT auth, quotas, HMAC-signed identity) ── 8000 container (internal-only; no host port)
+      → document_api (upload / status / list / delete / review / admin) ── 8001 (internal)
+      → mcp_server (FastMCP Streamable HTTP /mcp, 8 tools) ── 8002 host (AI CLI)
+  → web_ui (FastAPI + Jinja2 + vendored htmx; thin UI over gateway only) ── 8005 host (browser)
   → catalog (PostgreSQL 16 + Alembic; tenant-scoped repository)
   → job queue (Redis + RQ; queues: ingest, delete)
   → ingestion workers (scalable: --scale ingestion=N)
         pdftext native path → page router → olmOCR 2 FP8 (via vLLM) →
         canonical tree → structural chunking → EmbeddingGemma 2 client (CPU)
-  → embedding service (EmbeddingGemma 2, CPU, port 8003)
-  → retrieval service (port 8004; hybrid search + MiniLM rerank, CPU)
+  → embedding service (EmbeddingGemma 2, CPU, port 8003 internal)
+  → retrieval service (port 8004 internal; hybrid search + MiniLM rerank, CPU)
   → Milvus standalone v2.5.6 (dense 768-dim + BM25 hybrid, group_id partition key)
   → RustFS (tenant-scoped object storage: originals / renders / trees)
-  → vllm-olmocr (GPU plane; ONLY GPU consumer) ── 8000 (separate compose project)
+  → vllm-olmocr (GPU plane; ONLY GPU consumer) ── 8000 (separate compose project, internal)
 ```
 
 ## Services
 
-### gateway (port 8080 host)
+### gateway (port 8000 container, internal-only)
 Authenticated reverse proxy. Per request: strip spoofable headers →
 validate Bearer JWT (signature, issuer, audience, expiry; HS256 secret or
 RS256 via JWKS) → build trusted `RequestContext` from claims only → enforce
