@@ -9,6 +9,9 @@ HMAC-signed ``X-Druid-*`` identity headers (see
 
 from __future__ import annotations
 
+import logging
+import time
+
 import httpx
 from fastapi import Request
 from fastapi.responses import Response
@@ -16,6 +19,8 @@ from fastapi.responses import Response
 from services.common.request_context import RequestContext
 
 from .druid_internal import SPOOFABLE_HEADERS, build_internal_headers
+
+log = logging.getLogger(__name__)
 
 #: Hop-by-hop headers that must never be forwarded.
 _HOP_BY_HOP = frozenset(
@@ -61,23 +66,54 @@ async def forward_request(
     headers.update(build_internal_headers(context, internal_secret))
 
     body = await request.body()
+    started = time.monotonic()
+    log.info(
+        "forward start: %s %s → %s request_id=%s group=%s",
+        request.method,
+        request.url.path,
+        upstream_base,
+        context.request_id,
+        context.group_id,
+    )
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             upstream = await client.request(
                 request.method, target, headers=headers, content=body
             )
     except httpx.TimeoutException:
+        log.warning(
+            "forward timeout → 504: %s %s request_id=%s",
+            request.method,
+            request.url.path,
+            context.request_id,
+        )
         return Response(
             content='{"detail":"upstream service timed out"}',
             status_code=504,
             media_type="application/json",
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        log.warning(
+            "forward failed → 502: %s %s request_id=%s error=%s",
+            request.method,
+            request.url.path,
+            context.request_id,
+            exc,
+        )
         return Response(
             content='{"detail":"upstream service unavailable"}',
             status_code=502,
             media_type="application/json",
         )
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    log.info(
+        "forward finish: %s %s → %d in %.1fms request_id=%s",
+        request.method,
+        request.url.path,
+        upstream.status_code,
+        elapsed_ms,
+        context.request_id,
+    )
 
     passthrough = {
         name: value
