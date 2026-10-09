@@ -93,6 +93,22 @@ RustFS key, commit-before-enqueue, enqueue failure parks the job as
 <p>Limits: <code>MAX_UPLOAD_MB</code> (default 200) → <strong>413</strong>; <code>MAX_PAGES_PER_DOCUMENT</code>
 (default 2000) → <strong>400</strong>. Allowed MIME types: <code>application/pdf</code>,
 <code>image/png</code>, <code>image/jpeg</code>, <code>image/tiff</code>.</p>
+<h3 id="post-v1documentsregister-201"><code>POST /v1/documents/register</code> → 201</h3>
+<p>Two-phase upload, step 1: declare the upload (display name, MIME, byte
+size, SHA-256). Server validates the declaration (name sanitizing, MIME
+allowlist, size cap → <strong>413</strong>, SHA-256 shape → <strong>400</strong>), creates the
+document record + durable ingestion job in <code>UPLOADED</code> (not yet enqueued —
+no bytes exist), and issues a <strong>single-use upload ticket</strong> (TTL
+<code>upload_ticket_ttl_seconds</code>, default 900s). The ticket is redeemed in
+step 2; it is the authorization the MCP <code>ingest_document</code> tool returns.</p>
+<h3 id="post-v1documentsdocument_idbytes-200"><code>POST /v1/documents/{document_id}/bytes</code> → 200</h3>
+<p>Two-phase upload, step 2: redeem the ticket and send the bytes (multipart,
+ticket as form field). Constant-time ticket compare, TTL check, single-use:
+wrong ticket → <strong>403</strong>, consumed → <strong>409</strong>, expired → <strong>410</strong>. Bytes must
+match the declared size and SHA-256 exactly (<strong>400</strong> otherwise); sniffed
+MIME must agree with the declared one. From version creation onward the
+flow mirrors the single-shot upload (tenant-scoped RustFS key,
+commit-before-enqueue, enqueue failure parks the job <code>FAILED</code>).</p>
 <h3 id="get-v1documents"><code>GET /v1/documents</code></h3>
 <p>Tenant-scoped list. Query params:</p>
 <table>
@@ -121,6 +137,12 @@ store confirms.</p>
 <h3 id="get-v1documentsdocument_idstatus"><code>GET /v1/documents/{document_id}/status</code></h3>
 <p>Job status for the document's <strong>active version</strong> ingestion job:
 <code>{job_id, job_type, state, document_id, document_version_id}</code>.</p>
+<h2 id="job-routes">Job routes</h2>
+<h3 id="get-v1jobsjob_id-200"><code>GET /v1/jobs/{job_id}</code> → 200</h3>
+<p>Status of any job by id, tenant-scoped (cross-tenant reads as <strong>404</strong>,
+never 403). Reuses the job status shape: <code>{job_id, job_type, state,
+attempt_count, error}</code> with the error excerpt truncated to 500 chars.
+Unknown job → <strong>404</strong>. Unauthenticated → <strong>401</strong>.</p>
 <h2 id="review-routes">Review routes</h2>
 <h3 id="get-v1reviewitems"><code>GET /v1/review/items</code></h3>
 <p>List quarantine items for the tenant. Query params:</p>

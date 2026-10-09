@@ -1,94 +1,178 @@
 # new_DRUID — Enterprise Local-First RAG + MCP
 
-Self-hosted, multi-tenant document knowledge system. Ingestion, management, and
-retrieval are exposed through an authenticated API and an MCP server.
-**Offline-first**: production services load pre-staged artifacts and talk only
-to approved internal services. Deployment target: a **single NVIDIA H200**.
+> Self-hosted, multi-tenant document knowledge system. Ingest documents,
+> review the uncertain pages, and search everything — through a web UI, a
+> REST API, or 8 MCP tools your AI agent can call directly.
+> **Offline-first.** Deploys to a **single NVIDIA H200**.
 
-The normative architecture document is
-[`../new_DRUID_architecture_v2.md`](../new_DRUID_architecture_v2.md) (spec v2.1).
-This repo is its implementation. When the two disagree, the spec wins and this
-repo gets fixed.
+---
 
-## Architecture (condensed)
+## What it is
+
+| Pillar | Description |
+|---|---|
+| 📥 **Ingestion** | PDF/text/Office → page router (native pdftext vs. visual olmOCR 2) → canonical document tree → structural chunking → CPU embeddings |
+| 🧠 **Retrieval** | Hybrid dense (EmbeddingGemma 2, 768-dim) + server-side BM25 + identifier match → RRF fusion → MiniLM rerank, all tenant-scoped |
+| 🔌 **MCP server** | 8 FastMCP tools (Streamable HTTP + stdio) with JWT auth and role-gated mutations |
+| 🖥️ **Web UI** | Upload, Documents, Review queue, Quarantine, Search, and Admin views — dark mode, no CDN, vendored htmx |
+
+**Security model in one paragraph:** tenant identity comes only from a
+validated JWT (never from document content, tool arguments, or headers);
+retrieved text is wrapped in provenance delimiters and marked
+`trust="untrusted-document-content"` so it can never steer the agent;
+unreviewed, inactive, or deleting versions are hard-filtered at the catalog
+layer and never surface in search. Fail closed, everywhere.
+
+## Architecture
 
 ```
-clients (Web UI / AI agent / CLI)
-  → API Gateway (token validation, quotas, trusted identity context)
-      → Document API (upload / status / list / delete / review queue)
-      → MCP Server (FastMCP, Streamable HTTP + stdio adapter, 8 tools)
-  → Document Catalog (PostgreSQL: ownership, versions, jobs, review quarantine)
-  → Job Queue (Redis-backed; durable ingestion/deletion work)
-  → Ingestion Workers (pdftext native path → page router → olmOCR 2 FP8 →
-     canonical document tree → structural chunking → EmbeddingGemma 2 on CPU)
-  → Milvus (dense 768-dim + BM25 hybrid, group_id partition key)
-  → Object Storage (RustFS, S3-compatible, tenant-scoped: originals / renders / trees)
-GPU: vLLM serves olmOCR-2-7B-FP8 — the ONLY GPU consumer (--gpu-memory-utilization 0.7)
+browser / AI agent / CLI
+  │  web_ui :8005 (host)            mcp_server :8002 (host, Bearer JWT)
+  ▼                                ▼
+┌─────────────────────────────────────────────────────────┐
+│ gateway — JWT validation, quotas, HMAC-signed identity   │  (internal)
+└──────────────┬────────────────────────┬─────────────────┘
+               ▼                        ▼
+   document_api (upload /               mcp_server ──► retrieval (hybrid
+   review / admin)                      8 tools        search, CPU)
+        │                                              │
+        ▼                                              ▼
+   catalog (PostgreSQL)                         Milvus (dense+BM25)
+        │                                              │
+        ▼                                              ▼
+   job queue (Redis/RQ) ──► ingestion workers ──► RustFS (S3)
+        pdftext ──► page router ──► olmOCR 2 FP8 on vLLM (ONLY GPU consumer)
 ```
 
-Key policies:
+All containers also join the pre-existing external **`cora`** Docker network.
+Only three host ports are published: **8005** (web UI), **8002** (MCP),
+everything else is container-to-container.
 
-- **Tenant context** comes only from validated auth/gateway context — never from
-  document content, tool arguments, or headers. Fail closed.
-- **No partial visibility**: inactive, deleting, failed, or unreviewed versions
-  are hard-filtered at the catalog layer, never returned as searchable.
-- **Retrieved text is untrusted**: provenance-tagged responses; content can never
-  alter identity, authorization, or instructions.
-- **Approved artifacts only**: every model/dependency has a manifest
-  (`services/artifacts/manifests/`) with pinned revision, sha256, license.
-  ModelScope, Chinese mirrors, and unapproved endpoints are prohibited.
+## Quickstart
+
+```bash
+cp .env.example .env          # fill in secrets (never commit .env)
+docker network create cora    # only if not already present on your host
+
+# 1. Infrastructure
+docker compose -f deploy/docker-compose.yml up -d
+# 2. Schema + search collections (one-shot, must exit 0)
+docker compose -f deploy/docker-compose.yml run --rm catalog
+docker compose -f deploy/docker-compose.yml run --rm milvus_setup
+# 3. CPU services
+docker compose -f deploy/docker-compose.yml up -d
+# 4. GPU plane (H200 host only) — vLLM serving olmOCR-2-7B-FP8
+docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+```
+
+Then open **http://localhost:8005**, paste an operator-provisioned JWT on the
+login page, and upload a document. The review queue catches pages the router
+couldn't resolve on its own; an admin sees cross-tenant documents, jobs, and
+quotas.
+
+> **First boot needs three things:** model weights staged per
+> `services/artifacts/manifests/` (`MODEL_DIR`, read-only), the `cora`
+> network present, and live Postgres/Redis/RustFS/Milvus. See
+> `docs/runbook.md`.
+
+## MCP tools
+
+| Tool | What it does | Role |
+|---|---|---|
+| `search_knowledge_base` | Hybrid search with provenance-tagged passages | any |
+| `ingest_document` | Register upload → ticket → bytes → job | any |
+| `get_ingestion_status` | Job state for an upload | any |
+| `list_documents` / `get_document` | Tenant-scoped document metadata | any |
+| `get_review_item` | Inspect a quarantined page | reviewer+ |
+| `resolve_review_item` | Accept / re-route / reject a page | reviewer+ |
+| `delete_document` | Full deletion (confirm-gated) | any |
+
+```jsonc
+// Claude Code / MCP client config (Streamable HTTP)
+{ "mcpServers": { "druid": {
+  "url": "http://<h200>:8002/mcp",
+  "headers": { "Authorization": "Bearer <operator-provisioned JWT>" }
+}}}
+// …or local trusted stdio:
+// python -m mcp_server.stdio_adapter --user-id you --group-id your-tenant --roles admin,reviewer
+```
+
+## REST API (behind the gateway)
+
+| Area | Endpoints |
+|---|---|
+| Documents | `POST /v1/documents/register` → `POST /v1/documents/{id}/bytes` (ticketed upload), `GET /v1/documents`, `GET /v1/documents/{id}`, `DELETE /v1/documents/{id}` |
+| Review | `GET /v1/review/items`, `GET …/{item_id}`, `POST …/{item_id}/resolve` |
+| Jobs | `GET /v1/jobs/{job_id}` |
+| Admin (`admin` role) | `GET /v1/admin/documents`, `GET /v1/admin/jobs`, `GET /v1/admin/quotas` |
+
+Two-phase upload exists so large files can be chunked/resumable (the web UI
+splits in the browser); single-shot multipart upload also works.
+
+## Offline-first & artifact policy
+
+- Every model/dependency has a manifest in `services/artifacts/manifests/`
+  (pinned upstream revision, sha256, license). Production loads **only**
+  pre-staged artifacts and fails startup rather than downloading.
+- `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` baked into every image.
+- Approved models: `allenai/olmOCR-2-7B-1025-FP8`, `google/embeddinggemma-2`
+  (text+image), `cross-encoder/ms-marco-MiniLM-L6-v2`. Object storage is
+  **RustFS** (`rustfs/rustfs:1.0.1`, Apache-2.0).
+- Prohibited: modelscope.cn, Chinese mirrors, unapproved endpoints.
 
 ## Repo layout
 
 ```
 services/
-  gateway/        Auth gateway (FastAPI)
-  document_api/   Document + review-queue API (FastAPI)
-  mcp_server/     FastMCP server (Streamable HTTP + stdio)
-  catalog/        PostgreSQL models + Alembic migrations (library + runner)
-  ingestion/      pdftext workers, page router, chunking, embedding client
-  embedding/      EmbeddingGemma 2 CPU service (text+image, task-aware prompts)
-  retrieval/      Hybrid search, RRF fusion, MiniLM rerank (CPU)
-  milvus_setup/   One-shot collection/index creation job (pymilvus)
-  artifacts/      Artifact manifest tooling (validate / verify / allowlist)
-deploy/
-  docker-compose.yml        Postgres, Redis, RustFS, Milvus standalone
-  docker-compose.gpu.yml    vLLM olmOCR-2-7B-FP8 on the H200
-  vllm-olmocr.md            vLLM config + GPU arbitration notes
-docs/
-  runbook.md                Deployment runbook + host-sizing math
-  backup-restore.md         Backup/restore procedure (per §13 acceptance)
+  gateway/       JWT auth, quotas, trusted identity (HMAC-signed X-Druid-*)
+  document_api/  Upload (ticketed), review queue, admin API
+  mcp_server/    8 FastMCP tools — Streamable HTTP + stdio adapter
+  web_ui/        FastAPI + Jinja2 + vendored htmx, dark-mode default
+  catalog/       PostgreSQL models, Alembic, tenant-scoped repository
+  ingestion/     pdftext router, olmOCR client, chunker, pipeline, RQ workers
+  embedding/     EmbeddingGemma 2 CPU service (task-aware prefixes)
+  retrieval/     Hybrid search: dense + BM25 + identifiers → RRF → MiniLM
+  milvus_setup/ One-shot collection/index/alias job (pymilvus)
+  artifacts/     Manifest validate/verify CLI + example manifests
+deploy/          docker-compose.yml (CPU) · docker-compose.gpu.yml (vLLM)
+docs/            runbook.md · backup-restore.md
+docs-site/       18-page documentation site (sources + built HTML)
+skills/          druid-sage AI skill: usage/UX knowledge for both projects
+tests/           Cross-service wiring + deploy tests
 ```
 
-## Quickstart (dev)
+## Configuration
+
+All tunables live in `.env.example` (copy to `.env`). The highlights:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `WEB_UI_PORT` / `MCP_PORT` | `8005` / `8002` | The only published host ports |
+| `JWT_SECRET` or `JWT_PUBLIC_KEY_PEM` | — | Bearer-token verification (never commit) |
+| `QUOTA_INGEST_PAGES_PER_DAY` / `QUOTA_QUERY_QPS` | `1000` / `10` | Per-tenant quotas (Redis) |
+| `MODEL_DIR` | `/models` | Host artifact registry, mounted read-only |
+| `MAX_UPLOAD_MB` / `MAX_PAGES_PER_DOCUMENT` | `200` / `2000` | Upload guards |
+
+## Testing
 
 ```bash
-cp .env.example .env
-# 1. Start infrastructure
-docker compose -f deploy/docker-compose.yml up -d
-# 2. Run migrations + create Milvus collections
-docker compose -f deploy/docker-compose.yml run --rm catalog
-docker compose -f deploy/docker-compose.yml run --rm milvus_setup
-# 3. Start services
-docker compose -f deploy/docker-compose.yml up -d gateway document_api mcp_server
-# 4. GPU node only: start olmOCR inference
-docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+python -m pytest            # whole tree: 349 passed, 4 skipped (live-Milvus)
+python -m pytest services/web_ui  # 32 passed (own venv)
 ```
 
-## Dependency pins
+Per-service suites run the same way from each `services/<name>/`
+(the tree is unified — one invocation runs everything).
 
-Each service has a `requirements.txt` with `==` pins (Python 3.11+).
-Pins were chosen 2026-10-08 — **regenerate with `pip-compile` before any
-release**; treat them as a starting lockfile, not a verified one.
+## Docs & skill
 
-## Offline operation
+- 📖 **Full documentation site:** [`docs-site/site/index.html`](docs-site/site/index.html)
+  (18 pages: architecture, MCP reference, web UI guide, runbook, operations…)
+- 🤖 **`druid-sage` skill** ([`skills/druid-sage`](skills/druid-sage)): lets any AI
+  answer usage/UX questions about new_DRUID (and New_sage) from these docs.
 
-All service images set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`.
-Models mount read-only from the host artifact registry
-(`MODEL_DIR`, default `/models`). Missing artifacts fail startup loudly —
-never download at runtime.
+## Status
 
-## M1 eval corpus
-
-`eval/` (not yet built) will hold the 50–100 labeled documents that gate the
-page router, chunking targets, and retrieval tuning. Nothing ships untuned.
+Built and tested; all pushes current on `main`. What still needs the H200:
+model weights staged, full corpus ingestion, live Postgres/Redis/RustFS/Milvus
+integration tests, and the M1 eval-corpus calibration (router thresholds,
+rerank width). See `BUILD_LOG.md` for the full build history.
