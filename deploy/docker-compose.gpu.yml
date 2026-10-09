@@ -13,7 +13,7 @@ services:
     volumes:
       # Host artifact registry, READ-ONLY. The FP8 checkpoint must already be
       # staged at $MODEL_DIR/allenai/olmOCR-2-7B-1025-FP8 (see artifact manifest).
-    - ${MODEL_DIR:-/models}:/models:ro
+    - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
     command:
     - --model
     - /models/allenai/olmOCR-2-7B-1025-FP8

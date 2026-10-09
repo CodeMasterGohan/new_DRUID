@@ -7,13 +7,29 @@ vLLM run on CPU/host RAM. vLLM (olmOCR-2-7B-FP8) is the ONLY GPU consumer
 ## 0. Prerequisites
 
 - Docker Engine + Compose v2, NVIDIA Container Toolkit.
-- Host artifact registry at `$MODEL_DIR` (default `/models`) containing the
-  three approved checkpoints, each completed per its artifact manifest
+- Host artifact registry at `$MODEL_DIR` (default
+  `/DATA/docker/mounts/models`) containing the three approved checkpoints,
+  each completed per its artifact manifest
   (`services/artifacts/manifests/`):
   - `allenai/olmOCR-2-7B-1025-FP8`
   - `google/embeddinggemma-2`
   - `cross-encoder/ms-marco-MiniLM-L6-v2`
 - `.env` filled from `.env.example`. No external network at runtime.
+
+### Host bind-mount directories
+
+All persistent data lives in bind mounts under `/DATA/docker/mounts/<service>`
+— no named volumes. Docker creates a missing bind-mount directory as **root**,
+so pre-create them and fix ownership for the images that don't run as root:
+
+```bash
+sudo mkdir -p /DATA/docker/mounts/{postgres,redis,rustfs,etcd,milvus,models}
+sudo chown 70:70    /DATA/docker/mounts/postgres   # postgres:16-alpine runs as UID 70
+sudo chown 999:999  /DATA/docker/mounts/redis      # redis:7-alpine runs as UID 999
+sudo chown 10001:10001 /DATA/docker/mounts/rustfs   # rustfs runs as UID 10001
+# etcd and milvus run as root — no chown needed. models/ is read-only
+# (stage the checkpoints there per the manifests above).
+```
 
 ## 1. Host sizing (spec §9 — record the math, don't assume it)
 
