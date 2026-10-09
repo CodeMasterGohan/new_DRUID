@@ -16,18 +16,21 @@ page in the review queue. It never silently becomes searchable.
 from __future__ import annotations
 
 import base64
+import logging
 import re
 import time
 from dataclasses import dataclass, field
 
 from .config import OlmOcrSettings
 
+log = logging.getLogger(__name__)
+
 
 @dataclass
 class OlmOcrConfig:
     """Connection config (env-overridable)."""
 
-    base_url: str  # e.g. http://olmocr-vllm:8000
+    base_url: str  # e.g. http://vllm-olmocr:8000 (gpu compose service name)
     api_key: str = "not-needed"  # vLLM default; kept for client compat
     settings: OlmOcrSettings = field(default_factory=OlmOcrSettings)
 
@@ -36,7 +39,7 @@ class OlmOcrConfig:
         import os
 
         return cls(
-            base_url=os.environ.get("OLMOCR_VLLM_URL", "http://olmocr-vllm:8000"),
+            base_url=os.environ.get("OLMOCR_VLLM_URL", "http://vllm-olmocr:8000"),
             api_key=os.environ.get("OLMOCR_VLLM_API_KEY", "not-needed"),
         )
 
@@ -166,15 +169,29 @@ class OlmOcrClient:
         prompt = _toolkit_prompt()
 
         last_error: str | None = None
-        for attempt in range(1, self.settings.max_retries + 2):
+        max_attempts = self.settings.max_retries + 1
+        for attempt in range(1, max_attempts + 1):
             try:
                 raw = self._post(image_b64, prompt)
             except Exception as exc:  # noqa: BLE001 — retried, then parked
                 last_error = f"request failed: {exc}"
+                log.warning(
+                    "olmocr page %d attempt %d/%d failed: %s",
+                    page_index,
+                    attempt,
+                    max_attempts,
+                    last_error,
+                )
                 continue
             metadata, body = _parse_response(raw)
             ok, reason = _quality_check(metadata, body)
             if ok:
+                log.info(
+                    "olmocr page %d accepted: attempts=%d latency=%.1fs",
+                    page_index,
+                    attempt,
+                    time.monotonic() - started,
+                )
                 return OlmOcrResult(
                     page_index=page_index,
                     markdown=body,
@@ -184,7 +201,20 @@ class OlmOcrClient:
                     latency_s=time.monotonic() - started,
                 )
             last_error = f"quality check failed: {reason}"
+            log.warning(
+                "olmocr page %d attempt %d/%d quality rejected: %s",
+                page_index,
+                attempt,
+                max_attempts,
+                reason,
+            )
         # Out of retries: park for review, never silently index.
+        log.warning(
+            "olmocr page %d parked for review after %d attempts: %s",
+            page_index,
+            max_attempts,
+            last_error,
+        )
         metadata, body = _parse_response(last_error or "")
         return OlmOcrResult(
             page_index=page_index,

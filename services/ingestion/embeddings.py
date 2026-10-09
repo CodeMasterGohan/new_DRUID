@@ -165,19 +165,23 @@ class SentenceTransformersGemmaBackend(EmbeddingBackend):
                     "production services fail startup rather than downloading (§3)."
                 )
             # text+image config: audio encoder disabled per spec §8.
-            model_kwargs: dict = {}
+            # NOTE: config_kwargs is a TOP-LEVEL SentenceTransformer kwarg
+            # (forwarded to AutoConfig.from_pretrained, where audio_config=None
+            # disables the audio tower — verified against transformers 5.18's
+            # EmbeddingGemma2Config). It must NOT be nested inside model_kwargs:
+            # model_kwargs goes to AutoModel.from_pretrained, which silently
+            # ignores a config_kwargs entry. Verified against
+            # sentence-transformers 6.1.0's SentenceTransformer signature.
+            config_kwargs: dict = {}
             if self.settings.modality_config == "text+image":
-                model_kwargs["config_kwargs"] = {"audio_config": None}
+                config_kwargs = {"audio_config": None}
             elif self.settings.modality_config == "text-only":
-                model_kwargs["config_kwargs"] = {
-                    "vision_config": None,
-                    "audio_config": None,
-                }
+                config_kwargs = {"vision_config": None, "audio_config": None}
             self._model = SentenceTransformer(
                 self.model_path,
                 device="cpu",
                 trust_remote_code=False,
-                model_kwargs=model_kwargs,
+                config_kwargs=config_kwargs,
             )
         return self._model
 

@@ -244,6 +244,7 @@ def run_ingestion_job(
     """
     deps = deps or PipelineDeps()
     session = session_factory() if session_factory else _default_session()
+    log.info("worker start: ingestion job=%s", job_id)
     try:
         return _run(session, uuid.UUID(job_id), deps)
     finally:
@@ -535,6 +536,7 @@ def run_deletion_job(job_id: str, *, session_factory=None,
     """Drive the complete deletion workflow (§12)."""
     deps = deps or PipelineDeps()
     session = session_factory() if session_factory else _default_session()
+    log.info("worker start: deletion job=%s", job_id)
     try:
         job = session.get(Job, uuid.UUID(job_id))
         if job is None:
