@@ -1,7 +1,7 @@
 """Backend client for the web_ui (spec §16: API integration).
 
 The UI calls ONLY gateway REST endpoints with the *user's own* Bearer <redacted>
-No direct Postgres / Milvus / MinIO access. Tenant scoping is enforced
+No direct Postgres / Milvus / RustFS access. Tenant scoping is enforced
 downstream by the gateway + document_api; this client never invents,
 overrides, or forwards tenant identity — it forwards the token and lets
 the trusted services derive identity from it.

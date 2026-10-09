@@ -28,7 +28,7 @@ The UI calls **only** gateway endpoints with the user's own Bearer <redacted>
 - `POST /mcp` with `tools/call` → `search_knowledge_base` (gateway →
   mcp_server) for the Search page
 
-No direct Postgres / Milvus / MinIO access. Tenant scoping is enforced
+No direct Postgres / Milvus / RustFS access. Tenant scoping is enforced
 downstream; the UI adds no new data paths.
 
 ## Chunked upload

@@ -196,7 +196,7 @@ class MockGateway:
                     "page_index": 3,
                     "status": "pending",
                     "page_render_key": "renders/x.png",
-                    "page_render_url": "http://minio/renders/x.png?sig=1",
+                    "page_render_url": "http://rustfs/renders/x.png?sig=1",
                     "parse_attempts": {"native": {"ok": False}},
                     "routing_diagnostics": {"signal": "table"},
                     "reviewer_decision": None,

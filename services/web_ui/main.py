@@ -2,7 +2,7 @@
 
 Thin human layer over the gateway/document_api: validates the session JWT
 with the gateway's contract, then forwards API calls to the gateway with
-the user's own token. No direct database/Milvus/MinIO access.
+the user's own token. No direct database/Milvus/RustFS access.
 
 Uvicorn entry point: ``main:app`` (see Dockerfile).
 """
