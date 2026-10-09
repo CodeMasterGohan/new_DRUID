@@ -54,7 +54,7 @@ Notable wiring (all verified by `tests/test_deploy_wiring.py`):
   `test_only_allowlisted_services_publish_host_ports`.
   Compose service names use underscores (`document_api`,
   `mcp_server`).
-- `embedding` and `retrieval` mount `${MODEL_DIR:-/models}:/models:ro`
+- `embedding` and `retrieval` mount `${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro`
   (read-only); `ingestion` mounts the same.
 
 ## GPU arbitration (§2)
@@ -81,8 +81,8 @@ consumer requires re-validation of this policy.
 ## Model staging (artifact manifests)
 
 Before any service starts, the host registry at `$MODEL_DIR` (default
-`/models`) must contain the three approved checkpoints, each completed
-per its manifest in `services/artifacts/manifests/`:
+`/DATA/docker/mounts/models`) must contain the three approved checkpoints,
+each completed per its manifest in `services/artifacts/manifests/`:
 
 - `allenai/olmOCR-2-7B-1025-FP8`
 - `google/embeddinggemma-2`

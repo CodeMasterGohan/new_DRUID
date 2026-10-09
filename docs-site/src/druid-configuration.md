@@ -71,15 +71,15 @@ by the operator (see [Web UI](druid-web-ui.html)).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `MODEL_DIR` | `/models` | Host artifact registry; mounted `:ro` into embedding, retrieval, ingestion, vLLM |
-| `OLMOCR_MODEL_DIR` | `/models/allenai/olmOCR-2-7B-1025-FP8` | FP8 production checkpoint |
-| `EMBEDDING_MODEL_DIR` | `/models/google/embeddinggemma-2` | Fallback alias; see next row |
-| `EMBEDDING_MODEL_PATH` | `/models/google/embeddinggemma-2` | **Primary** name the embedding service reads |
+| `MODEL_DIR` | `/DATA/docker/mounts/models` | Host artifact registry; mounted `:ro` into embedding, retrieval, ingestion, vLLM |
+| `OLMOCR_MODEL_DIR` | `/DATA/docker/mounts/models/allenai/olmOCR-2-7B-1025-FP8` | FP8 production checkpoint |
+| `EMBEDDING_MODEL_DIR` | `/DATA/docker/mounts/models/google/embeddinggemma-2` | Fallback alias; see next row |
+| `EMBEDDING_MODEL_PATH` | `/DATA/docker/mounts/models/google/embeddinggemma-2` | **Primary** name the embedding service reads |
 | `EMBEDDING_MODALITY_CONFIG` | `text+image` | `text+image` \| `text-only` |
 | `EMBEDDING_DIMENSION` | `768` | Validated Matryoshka widths: 768/512/256/128 |
 | `EMBEDDING_BACKEND` | `st` | `st` (sentence-transformers) \| `mock` |
-| `RERANKER_MODEL_DIR` | `/models/cross-encoder/ms-marco-MiniLM-L6-v2` | MiniLM reranker |
-| `MINILM_TOKENIZER_PATH` | `/models/cross-encoder/ms-marco-MiniLM-L6-v2` | Tokenizer the ingestion chunker enforces its token budget with (fail-closed); separate var because the chunker needs only the tokenizer |
+| `RERANKER_MODEL_DIR` | `/DATA/docker/mounts/models/cross-encoder/ms-marco-MiniLM-L6-v2` | MiniLM reranker |
+| `MINILM_TOKENIZER_PATH` | `/DATA/docker/mounts/models/cross-encoder/ms-marco-MiniLM-L6-v2` | Tokenizer the ingestion chunker enforces its token budget with (fail-closed); separate var because the chunker needs only the tokenizer |
 | `HF_HUB_OFFLINE` | `1` | Baked into images; never download at runtime |
 | `TRANSFORMERS_OFFLINE` | `1` | Baked into images |
 
