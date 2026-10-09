@@ -69,7 +69,9 @@ Host-port policy (2026-10-09): only `web_ui` (8005, browser) and `mcp_server`
 
 ## Model staging (both projects)
 
-Stage into `$MODEL_DIR` (default `/models`), read-only mounts in compose:
+Stage into `$MODEL_DIR` (default `/DATA/docker/mounts/models`), read-only bind
+mounts in compose. All persistent data (not just models) lives in bind mounts
+under `/DATA/docker/mounts/<service>` — no named volumes anywhere:
 
 - new_DRUID: `allenai/olmOCR-2-7B-1025-FP8`, `google/embeddinggemma-2`,
   `cross-encoder/ms-marco-MiniLM-L6-v2`.
