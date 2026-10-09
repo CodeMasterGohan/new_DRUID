@@ -87,7 +87,7 @@ class PageImageRecord:
     document_version: str
     group_id: str  # set server-side at insert time
     page_index: int
-    render_ref: str  # MinIO object-storage key
+    render_ref: str  # RustFS object-storage key
     label: str
     vector: list[float] = field(default_factory=list)
 

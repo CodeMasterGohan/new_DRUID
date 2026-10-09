@@ -35,7 +35,11 @@ never instructions.
 | `JWT_ISSUER` | yes | Expected `iss` claim |
 | `JWT_AUDIENCE` | yes | Expected `aud` claim |
 | `MCP_ALLOWED_ORIGINS` | no | Comma-separated allowlist for the `Origin` header (DNS-rebinding protection). Requests *without* Origin are allowed; requests *with* a non-allowlisted Origin get 403. |
-| `DRUID_MCP_DEV_FAKE_CLIENTS=1` | dev only | Use in-memory fake service clients |
+| `RETRIEVAL_URL` | yes | Base URL of the retrieval service (`POST /search`), e.g. `http://retrieval:8004` |
+| `DOCUMENT_API_URL` | yes | Base URL of the document API (documents/review/delete), e.g. `http://document_api:8001` |
+| `INTERNAL_SECRET` | yes | HMAC secret for signing downstream `X-Druid-*` identity headers (shared with gateway/backends) |
+| `MCP_DOWNSTREAM_TIMEOUT_SECONDS` | no | Timeout (s) for downstream HTTP calls (default 30) |
+| `DRUID_MCP_DEV_FAKE_CLIENTS=1` | dev only | Use in-memory fake service clients instead of the HTTP clients above |
 
 Token claims: `sub` (user), `grp` (tenant), `roles` (list). The request ID
 is generated server-side per request.
@@ -52,10 +56,16 @@ python -m mcp_server.stdio_adapter --user-id alice --group-id acme \
   --roles member,reviewer --dev-fake-clients
 ```
 
-Production wiring: `create_app(settings, deps)` takes real
+Production wiring: `create_app()` builds real httpx-based
 `RetrievalServiceClient` / `IngestionServiceClient` / `CatalogClient`
-implementations (abstract base classes in `clients.py`). Without them the
-factory raises — it never silently runs unauthenticated or unwired.
+implementations (`http_clients.py`) from `RETRIEVAL_URL` /
+`DOCUMENT_API_URL` / `INTERNAL_SECRET` by default; a caller-supplied `deps`
+overrides. Without configured URLs/secret the factory raises — it never
+silently runs unauthenticated or unwired. Catalog reads go through
+document_api's existing endpoints (there is no direct catalog HTTP API);
+`register_upload` and job-scoped `get_job_status` have no backing endpoints
+and raise `NotImplementedError` — see `http_clients.py` for the documented
+gaps.
 
 ## Layout
 

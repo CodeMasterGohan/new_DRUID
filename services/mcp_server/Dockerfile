@@ -12,6 +12,10 @@ COPY services/mcp_server/src/ ./src/
 RUN useradd -r -u 10001 druid && chown -R druid:druid /app
 USER druid
 EXPOSE 8002
-# Required env: JWT_SECRET (HS256) or JWT_PUBLIC_KEY_PEM (RS256), JWT_ISSUER, JWT_AUDIENCE.
-# Optional: MCP_ALLOWED_ORIGINS (comma-separated).
+# Required env: JWT_SECRET (HS256) or JWT_PUBLIC_KEY_PEM (RS256), JWT_ISSUER, JWT_AUDIENCE,
+# RETRIEVAL_URL, DOCUMENT_API_URL, INTERNAL_SECRET (HMAC secret for signing
+# downstream identity headers).
+# Optional: MCP_ALLOWED_ORIGINS (comma-separated),
+# MCP_DOWNSTREAM_TIMEOUT_SECONDS (default 30), DRUID_MCP_DEV_FAKE_CLIENTS=1
+# (tests/dev only — never in production).
 CMD ["uvicorn", "--factory", "mcp_server.server:create_app", "--host", "0.0.0.0", "--port", "8002"]

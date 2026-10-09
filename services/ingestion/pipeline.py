@@ -13,7 +13,7 @@ revalidate trusted ownership context). It never comes from the payload.
 Seams (owned by sibling agents, honest stubs here):
 * ``IndexSink`` — the Milvus agent provides the real sink;
   :class:`LoggingIndexSink` records what *would* be indexed.
-* ``ObjectStore`` — MinIO in production; :class:`MemoryObjectStore` for tests.
+* ``ObjectStore`` — RustFS in production; :class:`MemoryObjectStore` for tests.
 * Embedding backend — :class:`MockEmbeddingBackend` default here; the real
   EmbeddingGemma 2 backend wires in at deploy time.
 
@@ -94,7 +94,7 @@ class LoggingIndexSink(IndexSink):
 
 
 class ObjectStore(abc.ABC):
-    """Tenant-scoped object storage boundary (MinIO in production)."""
+    """Tenant-scoped object storage boundary (RustFS in production)."""
 
     @abc.abstractmethod
     def put_bytes(self, key: str, data: bytes, content_type: str = "") -> None: ...
@@ -125,7 +125,7 @@ class MemoryObjectStore(ObjectStore):
         return len(doomed)
 
 
-class MinIOObjectStore(ObjectStore):
+class RustFSObjectStore(ObjectStore):
     """Production store (lazy minio import; bucket must exist)."""
 
     def __init__(self, endpoint: str, access_key: str, secret_key: str,
@@ -133,7 +133,7 @@ class MinIOObjectStore(ObjectStore):
         try:
             from minio import Minio
         except ImportError as exc:
-            raise RuntimeError("minio package is required for MinIOObjectStore") from exc
+            raise RuntimeError("minio package is required for RustFSObjectStore") from exc
         self._client = Minio(endpoint, access_key=access_key,
                              secret_key=secret_key, secure=secure)
         self._bucket = bucket
@@ -364,7 +364,7 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
     payload = job.payload or {}
     pdf_key = payload.get("pdf_key")
     if not pdf_key:
-        raise ValueError("job payload missing 'pdf_key' (MinIO key of the original)")
+        raise ValueError("job payload missing 'pdf_key' (S3 key of the original)")
     pdf_bytes = deps.object_store.get_bytes(pdf_key)
     import tempfile, os
 
@@ -586,7 +586,7 @@ def ensure_tenant(session, name: str) -> Tenant:
 
 __all__ = [
     "IndexSink", "LoggingIndexSink", "ObjectStore", "MemoryObjectStore",
-    "MinIOObjectStore", "PipelineDeps", "enqueue_ingestion_job",
+    "RustFSObjectStore", "PipelineDeps", "enqueue_ingestion_job",
     "run_ingestion_job", "run_deletion_job", "ensure_tenant",
     "PARSER_REVISION_NATIVE", "PARSER_REVISION_OLMOCR",
 ]
