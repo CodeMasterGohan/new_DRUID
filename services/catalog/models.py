@@ -248,7 +248,7 @@ class ReviewQuarantineItem(Base):
     page_index: Mapped[int] = mapped_column(Integer, nullable=False)
     page_render_ref: Mapped[str] = mapped_column(
         String(1024), nullable=False
-    )  # MinIO object-storage key for the page render
+    )  # RustFS object-storage key for the page render
     parse_attempts: Mapped[dict] = mapped_column(
         FlexibleJSON, nullable=False, default=dict
     )  # {"native": {...}, "visual": {...}}

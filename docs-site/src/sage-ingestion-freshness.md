@@ -58,7 +58,7 @@ crawl job on the Redis `sage-crawl` queue instead of failing:
    scrape, `/latest/` redirect resolution, or `git ls-remote --tags`.
 3. The crawler fetches the sitemap (one-level index recursion, same-origin +
    base-path scope filter, 5000-URL safety cap), downloads pages politely,
-   and stores raw HTML snapshots in MinIO.
+   and stores raw HTML snapshots in RustFS.
 4. Pipeline: trafilatura/readability → Markdown → heading chunking →
    EmbeddingGemma 2 → Milvus upsert → catalog marks the version ready.
 5. The original query is then served from the fresh index.
@@ -159,9 +159,21 @@ Two RQ job functions implement the §17.6 automation decision:
 - **`devdocs_sync()`** — monthly DevDocs image sync (diff, §"DevDocs
   refresh" above).
 
-**Gap:** the reviewed sources contain the job functions and the RQ workers
-that consume them, but **no scheduler is wired into the compose stack** — the
-crawler README says `refresh_stale` "runs on the compose scheduler," yet no
-scheduler service exists in `deploy/docker-compose.yml`. Until one is added
-(a host cron invoking the jobs, or an in-stack scheduler), these jobs must be
-triggered manually.
+The weekly sweep is driven by the **`scheduler` compose service**
+(`services/scheduler/` in the build tree): a stdlib-only Python daemon that
+calls `services.crawler.jobs.refresh_stale()` in-process once per
+`REFRESH_INTERVAL_SECONDS` (default 604800 = 7 days, overridable in
+compose via the same variable), with a uniform startup jitter
+(`SCHEDULER_STARTUP_JITTER_SECONDS`, default 600s) so stack restarts don't
+stampede the queue. Every run logs `refresh started` / `refresh finished
+(enqueued=N)` / `refresh failed` with a run id; a failed sweep never crashes
+the loop — it logs the error and backs off exponentially (interval ×
+2^failures, capped at 8× the interval) until a sweep succeeds. Manual
+trigger: `docker compose run --rm scheduler python -m scheduler.run
+--once` (exit 0 ok / 1 sweep failed / 2 bad config).
+
+**Remaining gap:** the monthly `devdocs_sync` has no scheduler yet —
+`devdocs_sync` without an explicit manifest raises `NotImplementedError`
+(real DevDocs image-manifest parsing is still an open gap in the crawler),
+so there is nothing schedulable to call. It stays a manual job until that
+gap closes.

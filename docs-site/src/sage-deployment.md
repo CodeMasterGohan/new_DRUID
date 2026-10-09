@@ -20,27 +20,29 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.
 
 | Service | Container port | Default host port | Notes |
 |---|---|---|---|
-| `mcp-server` | 8000 | `MCP_HOST_PORT` → 8000 | FastMCP, binds `0.0.0.0:8000` in-container |
-| `retrieval` | 8001 | `RETRIEVAL_HOST_PORT` → 8001 | |
-| `embedding` | 8002 | `EMBEDDING_HOST_PORT` → 8002 | |
+| `mcp-server` | 8000 | `MCP_HOST_PORT` → 8010 | FastMCP, binds `0.0.0.0:8000` in-container |
+| `retrieval` | 8001 | `RETRIEVAL_HOST_PORT` → 8011 | |
+| `embedding` | 8002 | `EMBEDDING_HOST_PORT` → 8012 | |
 | `ingestion-worker` | — | — | RQ `sage-ingest`; scale with `--scale ingestion-worker=4` |
 | `crawler-worker` | — | — | RQ `sage-crawl` |
-| `milvus-standalone` | 19530 / 9091 | `MILVUS_HOST_PORT` / `MILVUS_MGMT_HOST_PORT` | `milvusdb/milvus:latest` (CPU); shares MinIO bucket `sage-milvus` |
-| `minio` | 9000 / 9001 | `MINIO_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` | |
-| `postgres` | 5432 | `POSTGRES_HOST_PORT` → 5432 | `postgres:16.6-alpine` |
-| `redis` | 6379 | `REDIS_HOST_PORT` → 6379 | `redis:7.4.2-alpine`, AOF enabled |
+| `milvus-standalone` | 19530 / 9091 | `MILVUS_HOST_PORT` → 19531 / `MILVUS_MGMT_HOST_PORT` → 9092 | `milvusdb/milvus:latest` (CPU); shares RustFS bucket `sage-milvus` |
+| `rustfs` | 9000 / 9001 | `RUSTFS_HOST_PORT` → 9010 / `RUSTFS_CONSOLE_HOST_PORT` → 9011 | `rustfs/rustfs:1.0.1` (S3-compatible; replaced MinIO, whose community edition was archived in 2026) |
+| `postgres` | 5432 | `POSTGRES_HOST_PORT` → 5433 | `postgres:16.6-alpine` |
+| `redis` | 6379 | `REDIS_HOST_PORT` → 6380 | `redis:7.4.2-alpine`, AOF enabled |
 | `etcd` | — | — | Internal only; required by Milvus 2.6.x standalone. Not part of the client port contract. |
 | `catalog-migrate` | — | — | One-shot: Alembic migrations, then exits |
 | `milvus_setup` | — | — | One-shot: provisions `sage_chunks` idempotently |
 
-Named volumes: `pgdata`, `redisdata`, `miniodata`, `etcddata`, `milvusdata`,
+Named volumes: `pgdata`, `redisdata`, `rustfsdata`, `etcddata`, `milvusdata`,
 `model-artifacts`.
 
-The port contract is fixed on the container side. If new_DRUID runs on the
-same box (it publishes the same default host ports), remap the
-`${*_HOST_PORT}` variables in `.env` for one of the stacks — inter-service
-URLs use compose DNS names and fixed container ports, so they never need
-changing.
+The port contract is fixed on the container side. The default host ports sit
+in a separate block from new_DRUID's (gateway 8080, vLLM 8000, document_api
+8001, mcp 8002, embedding 8003, retrieval 8004, web_ui 8005, rustfs 9000/9001,
+milvus 19530/9091), so the two stacks no longer collide out of the box. If
+you need different ports, remap the `${*_HOST_PORT}` variables in `.env` —
+inter-service URLs use compose DNS names and fixed container ports, so they
+never need changing.
 
 ## Model artifact staging
 
@@ -85,7 +87,7 @@ From the build root (`~/workspace/new_sage/build/deploy`):
 cp .env.example .env && $EDITOR .env
 
 # 1. base infrastructure
-docker compose up -d postgres redis minio etcd milvus-standalone
+docker compose up -d postgres redis rustfs etcd milvus-standalone
 
 # 2. create the sage_chunks collection + indexes (idempotent; safe to re-run)
 docker compose run --rm milvus_setup
@@ -101,7 +103,7 @@ Verify:
 
 ```bash
 docker compose run --rm milvus_setup python -m milvus_setup.create_collection --check-only
-curl http://localhost:8000/health   # mcp-server
+curl http://localhost:8010/health   # mcp-server
 ```
 
 Useful:
@@ -122,10 +124,12 @@ docker compose run --rm milvus_setup python -m milvus_setup.create_collection --
 
 Two automated jobs are specified (§17.6 decision): a **weekly** stale-version
 sweep (`refresh_stale`) and a **monthly** DevDocs image sync (`devdocs_sync`).
-The job functions and their RQ workers exist in the build, but **no
-scheduler is wired into the compose stack in the reviewed sources** — the
-jobs must be triggered manually (or via a host cron) until scheduler wiring
-is added. Details and current status:
+The weekly sweep is driven by the **`scheduler` compose service**
+(`services/scheduler/`): it calls `refresh_stale()` in-process once per
+`REFRESH_INTERVAL_SECONDS` (default 7 days), with startup jitter and
+failure backoff. The monthly DevDocs sync is still manual — its
+image-manifest parsing is an open gap in the crawler. Details and current
+status:
 [sage-ingestion-freshness.html](sage-ingestion-freshness.html).
 
 ## MCP client wiring
@@ -133,7 +137,7 @@ is added. Details and current status:
 Point any MCP client at the Streamable HTTP endpoint:
 
 ```
-http://<host>:8000/mcp
+http://<host>:8010/mcp
 ```
 
 There is no auth header, no token, no tenant concept. Restrict network access

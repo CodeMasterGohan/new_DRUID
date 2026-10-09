@@ -28,7 +28,7 @@
        └─────────────┘                      └──────┬──────┘
                                                    ▼
                                             ┌─────────────┐
-                                            │ MinIO       │
+                                            │ RustFS      │
                                             │ raw snapshots│
                                             └─────────────┘
 ```
@@ -45,11 +45,11 @@ host ports can be remapped for side-by-side operation with new_DRUID.
 | `retrieval` | 8001 | `POST /retrieve` + `GET /health`. Version resolution, three-branch Milvus search, RRF fusion, MiniLM rerank, token-budget truncation. |
 | `embedding` | 8002 | CPU EmbeddingGemma 2 service: `POST /embed` (query-side), `POST /embed_documents` (doc-side), `GET /health`. Applies the PrefixContract prompt strings server-side. |
 | `ingestion-worker` | — | RQ worker on the `sage-ingest` queue: chunk → embed → Milvus upsert → catalog → version activation. Scalable (`--scale ingestion-worker=4`). |
-| `crawler-worker` | — | RQ worker on the `sage-crawl` queue: polite fetch, version detection, repo-clone pinning, MinIO snapshots. |
+| `crawler-worker` | — | RQ worker on the `sage-crawl` queue: polite fetch, version detection, repo-clone pinning, RustFS snapshots. |
 | `postgres` | 5432 | Catalog: libraries, versions, pages, crawl jobs. Migrated by the `catalog-migrate` one-shot (Alembic). |
 | `redis` | 6379 | Crawl/ingest job queues + hot `get-library-docs` response cache. |
-| `minio` | 9000 / 9001 | Raw HTML snapshots and seed checkouts — the rebuild source if Milvus ever needs reconstructing. |
-| `milvus-standalone` | 19530 / 9091 | `sage_chunks` collection; shares MinIO (bucket `sage-milvus`) for object storage. Needs the internal `etcd` sidecar (embedded etcd was removed in Milvus 2.6.x). |
+| `rustfs` | 9000 / 9001 | Raw HTML snapshots and seed checkouts — the rebuild source if Milvus ever needs reconstructing. |
+| `milvus-standalone` | 19530 / 9091 | `sage_chunks` collection; shares RustFS (bucket `sage-milvus`) for object storage. Needs the internal `etcd` sidecar (embedded etcd was removed in Milvus 2.6.x). |
 | `catalog-migrate` | — | One-shot: runs Alembic migrations, then exits. |
 | `milvus_setup` | — | One-shot: provisions the `sage_chunks` collection + indexes idempotently. |
 

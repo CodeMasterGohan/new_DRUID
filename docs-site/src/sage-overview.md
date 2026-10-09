@@ -67,7 +67,7 @@ hardware or sign-off before the system can serve real traffic:
 ## New_sage vs new_DRUID
 
 They share the same stack philosophy (offline-first artifacts, Milvus hybrid
-retrieval, Postgres catalog, MinIO snapshots), but they solve different problems:
+retrieval, Postgres catalog, RustFS snapshots), but they solve different problems:
 
 | | New_sage | new_DRUID |
 |---|---|---|

@@ -13,19 +13,19 @@ fixed; these change only the host side (e.g. when colocating with new_DRUID).
 | Variable | Default | Purpose |
 |---|---|---|
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `sage` / `sage` / `sage` | Catalog Postgres credentials. **Change the passwords.** |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `sage` / `sage-minio` | MinIO root credentials. **Change the password.** |
+| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` | `sage` / `sage-rustfs` | RustFS credentials. **Change the secret.** |
 | `MILVUS_COLLECTION` | `sage_chunks` | Milvus collection name |
 | `MILVUS_WAIT_TIMEOUT_S` | `600` | How long `milvus_setup` waits for Milvus |
 | `MODEL_PATH` | `/artifacts/embeddinggemma-2` | EmbeddingGemma 2 checkpoint in the model-artifacts volume |
 | `MINILM_MODEL_PATH` | `/artifacts/minilm` | MiniLM reranker checkpoint |
 | `MINILM_TOKENIZER_PATH` | `/artifacts/minilm` | MiniLM tokenizer (defaults to the model path in retrieval) |
-| `MCP_HOST_PORT` | `8000` | Host port for mcp-server |
-| `RETRIEVAL_HOST_PORT` | `8001` | Host port for retrieval |
-| `EMBEDDING_HOST_PORT` | `8002` | Host port for embedding |
-| `MILVUS_HOST_PORT` / `MILVUS_MGMT_HOST_PORT` | `19530` / `9091` | Host ports for Milvus |
-| `MINIO_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` | `9000` / `9001` | Host ports for MinIO |
-| `REDIS_HOST_PORT` | `6379` | Host port for Redis |
-| `POSTGRES_HOST_PORT` | `5432` | Host port for Postgres |
+| `MCP_HOST_PORT` | `8010` | Host port for mcp-server |
+| `RETRIEVAL_HOST_PORT` | `8011` | Host port for retrieval |
+| `EMBEDDING_HOST_PORT` | `8012` | Host port for embedding |
+| `MILVUS_HOST_PORT` / `MILVUS_MGMT_HOST_PORT` | `19531` / `9092` | Host ports for Milvus |
+| `RUSTFS_HOST_PORT` / `RUSTFS_CONSOLE_HOST_PORT` | `9010` / `9011` | Host ports for RustFS |
+| `REDIS_HOST_PORT` | `6380` | Host port for Redis |
+| `POSTGRES_HOST_PORT` | `5433` | Host port for Postgres |
 
 ## mcp-server
 
@@ -94,8 +94,10 @@ design; the service must never request GPU resources.
 | `DATABASE_URL` | (required) | Catalog Postgres |
 | `MILVUS_URI` | (required) | Milvus |
 | `EMBEDDING_URL` | (required) | Embedding service |
-| `MINIO_ENDPOINT` | (required) | Snapshot store |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | (required) | MinIO auth |
+| `RUSTFS_ENDPOINT` | (required) | Snapshot store |
+| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` | (required) | RustFS auth |
+| `RUSTFS_BUCKET` | `sage-snapshots` | Snapshot bucket |
+| `RUSTFS_SECURE` | `false` | TLS to RustFS |
 
 ## crawler-worker
 
@@ -103,10 +105,25 @@ design; the service must never request GPU resources.
 |---|---|---|
 | `REDIS_URL` | (required) | RQ transport, `sage-crawl` queue |
 | `DATABASE_URL` | (required) | Catalog Postgres |
-| `MINIO_ENDPOINT` | (required) | Snapshot store |
-| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | required for real MinIO | Snapshot store auth (compose maps the MinIO root credentials) |
-| `MINIO_BUCKET` | `sage-snapshots` | Snapshot bucket |
-| `MINIO_SECURE` | `false` | TLS to MinIO |
+| `RUSTFS_ENDPOINT` | (required) | Snapshot store |
+| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` | required for real RustFS | Snapshot store auth (compose maps the RustFS credentials) |
+| `RUSTFS_BUCKET` | `sage-snapshots` | Snapshot bucket |
+| `RUSTFS_SECURE` | `false` | TLS to RustFS |
+
+## scheduler
+
+The `scheduler` compose service runs the weekly `refresh_stale` sweep
+(`services/scheduler/`; calls `services.crawler.jobs.refresh_stale()`
+in-process — see [sage-ingestion-freshness.html](sage-ingestion-freshness.html)).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REDIS_URL` | (required) | RQ transport — the sweep enqueues crawl jobs |
+| `DATABASE_URL` | (required) | Catalog Postgres — the sweep lists stale versions |
+| `REFRESH_INTERVAL_SECONDS` | `604800` (7 days) | sweep interval; plain seconds or `s`/`m`/`h`/`d` suffix (`7d`) |
+| `SCHEDULER_STARTUP_JITTER_SECONDS` | `600` | max uniform startup delay before the first run; `0` disables |
+| `SCHEDULER_BACKOFF_CAP_MULTIPLIER` | `8` | failure backoff capped at this × interval |
+| `SCHEDULER_LOG_LEVEL` | `INFO` | log level |
 
 ## Refresh cadence (not env vars)
 
@@ -120,8 +137,8 @@ not an environment variable in the reviewed sources. See
 - The derived `EMBEDDING_*` names above follow the `env_prefix="EMBEDDING_"`
   convention in `services/embedding/settings.py`; the file was reviewed and
   the listed fields match it.
-- No scheduler-related variables exist in the reviewed sources — the weekly
-  refresh and monthly DevDocs sync have no scheduling configuration yet.
+- No scheduler-related variables exist for the monthly DevDocs sync — it has
+  no scheduling configuration yet (see [sage-ingestion-freshness.html](sage-ingestion-freshness.html)).
 - No ingestion tunables (chunk target/overlap, politeness rate) are exposed
   as env vars in the reviewed sources; they are code constants
   (420/48 chunking, 1 req/s per host, 5000-URL sitemap cap).
