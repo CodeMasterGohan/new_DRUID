@@ -62,10 +62,11 @@ implementations (`http_clients.py`) from `RETRIEVAL_URL` /
 `DOCUMENT_API_URL` / `INTERNAL_SECRET` by default; a caller-supplied `deps`
 overrides. Without configured URLs/secret the factory raises — it never
 silently runs unauthenticated or unwired. Catalog reads go through
-document_api's existing endpoints (there is no direct catalog HTTP API);
-`register_upload` and job-scoped `get_job_status` have no backing endpoints
-and raise `NotImplementedError` — see `http_clients.py` for the documented
-gaps.
+document_api's endpoints (there is no direct catalog HTTP API);
+`register_upload` maps to `POST /v1/documents/register` and job-scoped
+`get_job_status` to `GET /v1/jobs/{job_id}` — both landed 2026-10-09, so
+neither raises `NotImplementedError` anymore. See `http_clients.py` for
+the remaining documented gaps.
 
 ## Layout
 
@@ -90,9 +91,9 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/ -q
 
 ## Notes / gaps
 
-- Downstream HTTP clients (retrieval/ingestion/catalog services) are not
-  implemented here — sibling agents own those services; this server calls
-  them only through the ABCs.
+- Downstream HTTP clients live in `http_clients.py` (httpx, signed
+  `druid-v1` / timestamped identity headers per `RequestContext`); this
+  server still never touches Milvus, Postgres, or the queue directly.
 - `delete_document`/`resolve_review_item` require `confirm: true`
   (client-side confirmation support per §11).
 - Quota enforcement lives at the gateway (§4); the MCP server re-validates

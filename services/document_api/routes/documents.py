@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
+import secrets
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from sqlalchemy.orm import Session
 
 from services.catalog.errors import (
@@ -42,6 +53,8 @@ from schemas import (
     DocumentListResponse,
     DocumentSummary,
     JobStatusResponse,
+    RegisterUploadRequest,
+    RegisterUploadResponse,
     UploadResponse,
     VersionInfo,
     ArtifactReference,
@@ -49,6 +62,7 @@ from schemas import (
 from settings import DocumentApiSettings
 from storage import ObjectStore, storage_key
 from validation import (
+    ALLOWED_MIME_TYPES,
     UploadTooLargeError,
     UploadValidationError,
     count_pages,
@@ -95,6 +109,13 @@ def _safe_display_name(filename: str | None) -> str:
     name = os.path.basename(filename or "upload")
     name = name.strip() or "upload"
     return name[:255]
+
+
+def hmac_compare(expected: str, presented: str) -> bool:
+    """Constant-time string comparison for single-use ticket checks."""
+    return hmac.compare_digest(
+        expected.encode("utf-8"), presented.encode("utf-8")
+    )
 
 
 def _doc_to_summary(doc) -> DocumentSummary:
@@ -286,6 +307,341 @@ async def upload_document(
                 )
         log.exception(
             "upload failed: group=%s request_id=%s",
+            context.group_id,
+            context.request_id,
+        )
+        raise HTTPException(status_code=500, detail=f"upload failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/documents/register — two-phase upload, step 1
+# ---------------------------------------------------------------------------
+
+
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _validate_declaration(
+    body: RegisterUploadRequest, max_bytes: int, max_upload_mb: int
+) -> tuple[str, str, str]:
+    """Validate the declared file metadata (no bytes available yet).
+
+    Returns ``(display_name, mime_type, sha256_hex)``. Byte-level checks
+    (magic-byte sniffing, page count) happen at redemption, when the bytes
+    exist; the redeemed bytes must match this declaration exactly.
+    """
+    display_name = _safe_display_name(body.filename)
+    mime = (body.mime_type or "").split(";")[0].strip().lower()
+    if mime not in ALLOWED_MIME_TYPES:
+        raise UploadValidationError(
+            f"unsupported declared MIME type: {body.mime_type!r}"
+        )
+    if body.file_size_bytes < 1:
+        raise UploadValidationError("file_size_bytes must be positive")
+    if body.file_size_bytes > max_bytes:
+        raise UploadTooLargeError(
+            f"declared size exceeds the {max_upload_mb} MiB limit"
+        )
+    sha256_hex = body.content_sha256.lower()
+    if len(sha256_hex) != 64 or any(c not in _HEX_DIGITS for c in sha256_hex):
+        raise UploadValidationError(
+            "content_sha256 must be 64 hexadecimal characters"
+        )
+    return display_name, mime, sha256_hex
+
+
+#: Idempotency-key prefix for the job row created at registration. The
+#: redemption endpoint finds the pending job through it.
+_REGISTER_IDEMPOTENCY_PREFIX = "register-"
+
+
+@router.post(
+    "/v1/documents/register",
+    response_model=RegisterUploadResponse,
+    status_code=201,
+)
+def register_upload(
+    body: RegisterUploadRequest,
+    context: RequestContext = Depends(get_trusted_context),
+    session: Session = Depends(get_session),
+    settings: DocumentApiSettings = Depends(get_settings),
+):
+    """Two-phase upload, step 1: declare the file, reserve the records (§5).
+
+    Validates the declaration (display name, MIME allowlist, size cap,
+    SHA-256 shape), creates the catalog document record and the durable
+    ingestion job (state ``UPLOADED``, **not** enqueued — no bytes exist
+    yet), and issues a single-use upload ticket bound to this tenant,
+    document, and declaration. The caller redeems the ticket with the
+    actual bytes at ``POST /v1/documents/{id}/bytes`` before
+    ``upload_ticket_ttl_seconds`` elapses.
+
+    Quota enforcement lives at the gateway (§4); like the single-shot
+    upload route, this endpoint performs no quota accounting itself.
+    """
+    repo = CatalogRepository(session, context)
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    try:
+        display_name, mime, sha256_hex = _validate_declaration(
+            body, max_bytes, settings.max_upload_mb
+        )
+        doc = repo.create_document(
+            display_name=display_name, content_checksum=sha256_hex
+        )
+        ticket = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=settings.upload_ticket_ttl_seconds
+        )
+        job = repo.create_job(
+            job_type="ingestion",
+            document_id=doc.id,
+            idempotency_key=f"{_REGISTER_IDEMPOTENCY_PREFIX}{doc.id.hex}",
+            payload={
+                "upload_ticket": ticket,
+                "ticket_expires_at": expires_at.isoformat(),
+                "declared_filename": display_name,
+                "declared_mime_type": mime,
+                "declared_size_bytes": body.file_size_bytes,
+                "declared_sha256": sha256_hex,
+            },
+        )
+        session.commit()
+    except (UploadTooLargeError, UploadValidationError, InternalAuthError,
+            TenantContextError, AuthorizationError, NotFoundError,
+            ConflictError) as exc:
+        session.rollback()
+        log.warning(
+            "register rejected: %s (%s) group=%s request_id=%s",
+            type(exc).__name__,
+            exc,
+            context.group_id,
+            context.request_id,
+        )
+        raise _to_http(exc)
+    log.info(
+        "register: document=%s job=%s group=%s request_id=%s",
+        doc.id,
+        job.id,
+        context.group_id,
+        context.request_id,
+    )
+    return RegisterUploadResponse(
+        document_id=str(doc.id),
+        job_id=str(job.id),
+        upload_ticket=ticket,
+        expires_in_seconds=settings.upload_ticket_ttl_seconds,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/documents/{id}/bytes — two-phase upload, step 2 (redeem ticket)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/v1/documents/{document_id}/bytes", response_model=UploadResponse)
+async def upload_document_bytes(
+    document_id: uuid.UUID,
+    upload_ticket: str = Form(...),
+    file: UploadFile = File(...),
+    context: RequestContext = Depends(get_trusted_context),
+    session: Session = Depends(get_session),
+    settings: DocumentApiSettings = Depends(get_settings),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Two-phase upload, step 2: redeem the ticket with the file bytes (§5).
+
+    The ticket is single-use, TTL-bound, and pinned to the tenant, the
+    document, and the registered declaration: the uploaded bytes must match
+    the declared size and SHA-256 exactly, and the sniffed MIME type must
+    agree with the declared one. On success the version record is created,
+    the bytes are stored under the tenant-scoped key, the ticket is marked
+    consumed, and the registration job becomes a real ingestion job and is
+    enqueued — mirroring the single-shot ``/upload`` route from there on.
+    """
+    repo = CatalogRepository(session, context)
+    try:
+        doc = repo.get_document(document_id)  # 404 unless owned by tenant
+    except NotFoundError as exc:
+        raise _to_http(exc)
+
+    job = repo.get_job_by_idempotency_key(
+        f"{_REGISTER_IDEMPOTENCY_PREFIX}{doc.id.hex}"
+    )
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no pending upload registration for this document",
+        )
+    payload = dict(job.payload or {})
+    expected_ticket = payload.get("upload_ticket")
+    if not isinstance(expected_ticket, str) or not hmac_compare(
+        expected_ticket, upload_ticket
+    ):
+        raise HTTPException(status_code=403, detail="invalid upload ticket")
+    if payload.get("ticket_consumed_at"):
+        raise HTTPException(
+            status_code=409, detail="upload ticket already used"
+        )
+    expires_at = payload.get("ticket_expires_at")
+    try:
+        expired = (
+            expires_at is None
+            or datetime.now(timezone.utc)
+            >= datetime.fromisoformat(expires_at)
+        )
+    except ValueError:
+        expired = True
+    if expired:
+        raise HTTPException(status_code=410, detail="upload ticket expired")
+
+    declared_size = payload.get("declared_size_bytes")
+    declared_sha256 = payload.get("declared_sha256")
+    declared_mime = payload.get("declared_mime_type")
+    if not isinstance(declared_size, int) or not declared_sha256:
+        # Registration rows always carry the declaration; a missing one
+        # means the job row was tampered with or predates this flow.
+        raise HTTPException(
+            status_code=500, detail="upload registration is malformed"
+        )
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    stored_keys: list[str] = []
+    log.info(
+        "bytes upload start: document=%s job=%s group=%s request_id=%s",
+        doc.id,
+        job.id,
+        context.group_id,
+        context.request_id,
+    )
+    try:
+        data = await _read_bounded(file, max_bytes)
+        if not data:
+            raise UploadValidationError("uploaded file is empty")
+        if len(data) != declared_size:
+            raise UploadValidationError(
+                f"uploaded {len(data)} bytes, declaration said "
+                f"{declared_size} bytes"
+            )
+        checksum = hashlib.sha256(data).hexdigest()
+        if checksum != declared_sha256:
+            raise UploadValidationError(
+                "uploaded bytes do not match the declared SHA-256"
+            )
+        mime = validate_mime(data, declared_mime)
+        page_count = count_pages(data, mime)
+        if page_count > settings.max_pages_per_document:
+            raise UploadValidationError(
+                f"document has {page_count} pages, exceeding the "
+                f"{settings.max_pages_per_document}-page limit"
+            )
+        display_name = _safe_display_name(file.filename)
+
+        version = repo.create_version(
+            doc.id,
+            parser=UPLOAD_PARSER,
+            parser_revision=UPLOAD_PARSER_REVISION,
+            page_count=page_count,
+        )
+        key = _original_key(context, doc, version)
+        store.put_bytes(key, data, content_type=mime)
+        stored_keys.append(key)
+
+        # Promote the registration job into the ingestion job: attach the
+        # version, the worker payload, and mark the ticket consumed, then
+        # commit BEFORE the job becomes visible to workers.
+        job.document_version_id = version.id
+        job.payload = {
+            **payload,
+            "queue": settings.ingest_queue,
+            "pdf_key": key,
+            "content_type": mime,
+            "page_count": page_count,
+            "document_id": str(doc.id),
+            "document_version_id": str(version.id),
+            "ticket_consumed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        session.commit()
+
+        try:
+            enqueue_rq(
+                settings.ingest_queue, INGESTION_ENTRYPOINT, job, settings.redis_url
+            )
+        except Exception as exc:
+            repo.update_job_state(
+                job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
+            )
+            session.commit()
+            log.error(
+                "bytes upload enqueue failed: job=%s document=%s group=%s "
+                "request_id=%s: %s",
+                job.id,
+                doc.id,
+                context.group_id,
+                context.request_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"upload stored but job enqueue failed: {exc}",
+            )
+
+        log.info(
+            "bytes upload finish: document=%s version=%s job=%s pages=%d "
+            "group=%s request_id=%s",
+            doc.id,
+            version.id,
+            job.id,
+            page_count,
+            context.group_id,
+            context.request_id,
+        )
+        return UploadResponse(
+            document_id=str(doc.id),
+            job_id=str(job.id),
+            status=job.state.value,
+            page_count=page_count,
+            checksum_sha256=checksum,
+            display_name=display_name,
+        )
+    except (UploadTooLargeError, UploadValidationError, InternalAuthError,
+            TenantContextError, AuthorizationError, NotFoundError,
+            ConflictError) as exc:
+        session.rollback()
+        for k in stored_keys:  # best-effort cleanup of orphaned bytes
+            try:
+                store.delete_prefix(k)
+            except Exception as cleanup_exc:
+                log.debug(
+                    "bytes upload cleanup: delete_prefix(%r) failed: %s",
+                    k,
+                    cleanup_exc,
+                )
+        log.warning(
+            "bytes upload rejected: %s (%s) document=%s group=%s request_id=%s",
+            type(exc).__name__,
+            exc,
+            doc.id,
+            context.group_id,
+            context.request_id,
+        )
+        raise _to_http(exc)
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        session.rollback()
+        for k in stored_keys:
+            try:
+                store.delete_prefix(k)
+            except Exception as cleanup_exc:
+                log.debug(
+                    "bytes upload cleanup: delete_prefix(%r) failed: %s",
+                    k,
+                    cleanup_exc,
+                )
+        log.exception(
+            "bytes upload failed: document=%s group=%s request_id=%s",
+            doc.id,
             context.group_id,
             context.request_id,
         )

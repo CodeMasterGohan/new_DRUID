@@ -51,6 +51,10 @@ class DocumentApiSettings(BaseSettings):
     max_upload_mb: int = 200
     max_pages_per_document: int = 2000
 
+    # --- two-phase upload tickets (§5) ---
+    # TTL for the single-use ticket issued by POST /v1/documents/register.
+    upload_ticket_ttl_seconds: int = 900
+
     # --- quota limits mirrored from the gateway (§4, admin views) ---
     # Must match the gateway's QUOTA_INGEST_PAGES_PER_DAY / QUOTA_QUERY_QPS:
     # the admin quotas endpoint reads usage from the gateway's Redis

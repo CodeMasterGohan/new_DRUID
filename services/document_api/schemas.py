@@ -80,6 +80,27 @@ class DeleteResponse(BaseModel):
     status: str
 
 
+# ---------------------------------------------------------------------------
+# Two-phase upload: ticket registration + byte redemption (§5, §11, §12)
+# ---------------------------------------------------------------------------
+
+
+class RegisterUploadRequest(BaseModel):
+    """File declaration for the register step (no bytes cross here)."""
+
+    filename: str
+    mime_type: str
+    file_size_bytes: int
+    content_sha256: str
+
+
+class RegisterUploadResponse(BaseModel):
+    document_id: str
+    job_id: str
+    upload_ticket: str  # single-use; presented to the bytes endpoint
+    expires_in_seconds: int
+
+
 class ReviewItemSummary(BaseModel):
     item_id: str
     document_id: str
