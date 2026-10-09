@@ -83,9 +83,26 @@ def get_object_store(request: Request) -> ObjectStore:
     return request.app.state.object_store
 
 
+def get_redis_client(
+    settings: DocumentApiSettings = Depends(get_settings),
+):
+    """Redis client for reading the gateway's quota counters (admin views).
+
+    The client connects lazily (redis-py); connection failures surface at
+    call time and are handled by callers (usage reported as unknown).
+    Imported lazily like ``job_queue.enqueue_rq`` so this module stays
+    importable where redis isn't installed. Override in tests via
+    dependency_overrides.
+    """
+    from redis import Redis
+
+    return Redis.from_url(settings.redis_url, decode_responses=True)
+
+
 __all__ = [
     "default_object_store",
     "get_object_store",
+    "get_redis_client",
     "get_repository",
     "get_session",
     "get_session_factory",

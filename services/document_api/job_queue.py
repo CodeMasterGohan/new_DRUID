@@ -20,10 +20,13 @@ Payload contract (read by the pipeline worker):
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from services.catalog.models import Job
 from services.catalog.repository import CatalogRepository
+
+log = logging.getLogger(__name__)
 
 #: RQ entry point for ingestion workers (services.ingestion.pipeline).
 INGESTION_ENTRYPOINT = "services.ingestion.pipeline.run_ingestion_job"
@@ -44,6 +47,13 @@ def enqueue_rq(queue_name: str, entrypoint: str, job: Job, redis_url: str) -> No
     redis = Redis.from_url(redis_url)
     queue = Queue(queue_name, connection=redis)
     queue.enqueue(entrypoint, str(job.id), job_id=f"{queue_name}-{job.id}")
+    log.info(
+        "enqueued job: job=%s type=%s queue=%s entrypoint=%s",
+        job.id,
+        job.job_type,
+        queue_name,
+        entrypoint,
+    )
 
 
 def create_ingestion_job(
