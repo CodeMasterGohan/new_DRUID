@@ -146,31 +146,27 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.</p>
 </table>
 <p>Host-port policy (2026-10-09): only <code>mcp-server</code> publishes a host port;
 everything else is container-to-container on the compose/<code>cora</code> networks.</p>
-<p>Named volumes: <code>pgdata</code>, <code>redisdata</code>, <code>rustfsdata</code>, <code>etcddata</code>, <code>milvusdata</code>,
-<code>model-artifacts</code>.</p>
+<p>Persistent data lives in host bind mounts under <code>/DATA/docker/mounts/&lt;service&gt;</code>
+(postgres, redis, rustfs, etcd, milvus, model-artifacts) — no named volumes.
+Pre-create the directories and fix ownership for non-root images (postgres
+UID 70, redis UID 999, rustfs UID 10001); see the deploy README.</p>
 <p>The port contract is fixed on the container side. Host-port policy
 (2026-10-09): only <code>mcp-server</code> publishes a host port (<code>MCP_HOST_PORT</code> →
 8010, for the AI CLI); everything else is container-to-container.
 Inter-service URLs use compose DNS names and fixed container ports, so they
 never need changing.</p>
 <h2 id="model-artifact-staging">Model artifact staging</h2>
-<p>Services are offline-first: they load pre-staged artifacts from the
-<code>model-artifacts</code> volume (read-only) and fail startup rather than downloading
-at runtime (<code>HF_HUB_OFFLINE=1</code>, <code>TRANSFORMERS_OFFLINE=1</code> are set in the
-stack). <strong>The build does not include the weights</strong> — stage them once before
-first boot:</p>
-<pre><code class="language-bash"># 1. create the volume (actual name: &lt;project&gt;_model-artifacts; check `docker volume ls`)
-docker volume create new_sage_model-artifacts
-
-# 2. copy the models in (volume mount path is /artifacts inside containers)
-docker run --rm \
-  -v &lt;volume-name&gt;:/artifacts \
-  -v /path/to/your/models:/src:ro \
-  alpine sh -c 'mkdir -p /artifacts/embeddinggemma-2 /artifacts/minilm &amp;&amp; \
-    cp -r /src/embeddinggemma-2/* /artifacts/embeddinggemma-2/ &amp;&amp; \
-    cp -r /src/minilm/* /artifacts/minilm/'
+<p>Services are offline-first: they load pre-staged artifacts from the host bind
+mount <code>/DATA/docker/mounts/model-artifacts</code> (read-only at <code>/artifacts</code> inside
+containers) and fail startup rather than downloading at runtime
+(<code>HF_HUB_OFFLINE=1</code>, <code>TRANSFORMERS_OFFLINE=1</code> are set in the stack).
+<strong>The build does not include the weights</strong> — stage them once before first
+boot by copying the checkpoints straight into the host directory:</p>
+<pre><code class="language-bash">sudo mkdir -p /DATA/docker/mounts/model-artifacts/{embeddinggemma-2,minilm}
+sudo cp -r /path/to/your/models/embeddinggemma-2/* /DATA/docker/mounts/model-artifacts/embeddinggemma-2/
+sudo cp -r /path/to/your/models/minilm/*           /DATA/docker/mounts/model-artifacts/minilm/
 </code></pre>
-<p>Expected volume layout:</p>
+<p>Expected host layout:</p>
 <pre><code>/artifacts/
   embeddinggemma-2/   # google/embeddinggemma-2 checkpoint, offline loadable
   minilm/             # MiniLM reranker checkpoint + tokenizer
