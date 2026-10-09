@@ -36,8 +36,10 @@ runtime services plus 2 one-shot jobs and 1 internal sidecar.
 Host-port policy (2026-10-09): only `mcp-server` publishes a host port;
 everything else is container-to-container on the compose/`cora` networks.
 
-Named volumes: `pgdata`, `redisdata`, `rustfsdata`, `etcddata`, `milvusdata`,
-`model-artifacts`.
+Persistent data lives in host bind mounts under `/DATA/docker/mounts/<service>`
+(postgres, redis, rustfs, etcd, milvus, model-artifacts) — no named volumes.
+Pre-create the directories and fix ownership for non-root images (postgres
+UID 70, redis UID 999, rustfs UID 10001); see the deploy README.
 
 The port contract is fixed on the container side. Host-port policy
 (2026-10-09): only `mcp-server` publishes a host port (`MCP_HOST_PORT` →
@@ -47,26 +49,20 @@ never need changing.
 
 ## Model artifact staging
 
-Services are offline-first: they load pre-staged artifacts from the
-`model-artifacts` volume (read-only) and fail startup rather than downloading
-at runtime (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` are set in the
-stack). **The build does not include the weights** — stage them once before
-first boot:
+Services are offline-first: they load pre-staged artifacts from the host bind
+mount `/DATA/docker/mounts/model-artifacts` (read-only at `/artifacts` inside
+containers) and fail startup rather than downloading at runtime
+(`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` are set in the stack).
+**The build does not include the weights** — stage them once before first
+boot by copying the checkpoints straight into the host directory:
 
 ```bash
-# 1. create the volume (actual name: <project>_model-artifacts; check `docker volume ls`)
-docker volume create new_sage_model-artifacts
-
-# 2. copy the models in (volume mount path is /artifacts inside containers)
-docker run --rm \
-  -v <volume-name>:/artifacts \
-  -v /path/to/your/models:/src:ro \
-  alpine sh -c 'mkdir -p /artifacts/embeddinggemma-2 /artifacts/minilm && \
-    cp -r /src/embeddinggemma-2/* /artifacts/embeddinggemma-2/ && \
-    cp -r /src/minilm/* /artifacts/minilm/'
+sudo mkdir -p /DATA/docker/mounts/model-artifacts/{embeddinggemma-2,minilm}
+sudo cp -r /path/to/your/models/embeddinggemma-2/* /DATA/docker/mounts/model-artifacts/embeddinggemma-2/
+sudo cp -r /path/to/your/models/minilm/*           /DATA/docker/mounts/model-artifacts/minilm/
 ```
 
-Expected volume layout:
+Expected host layout:
 
 ```
 /artifacts/
