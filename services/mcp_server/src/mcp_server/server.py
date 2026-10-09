@@ -37,6 +37,11 @@ from .clients import (
     InMemoryIngestionClient,
     InMemoryRetrievalClient,
 )
+from .http_clients import (
+    HttpCatalogClient,
+    HttpIngestionClient,
+    HttpRetrievalClient,
+)
 from .context import clear_context, set_context
 from . import tools as tool_impls
 from .models import (
@@ -72,6 +77,12 @@ class Settings:
     jwt_audience: str = "druid-mcp"
     allowed_origins: tuple[str, ...] = ()
     dev_fake_clients: bool = False
+    # Downstream services the real HTTP clients call (spec §11). The fake
+    # clients ignore these; the real ones fail closed when they are unset.
+    retrieval_url: str = ""
+    document_api_url: str = ""
+    internal_secret: str = ""
+    downstream_timeout_seconds: float = 30.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,6 +96,10 @@ class Settings:
         if public_key:
             algorithms = ("RS256",)
             key = public_key
+        try:
+            timeout = float(os.getenv("MCP_DOWNSTREAM_TIMEOUT_SECONDS", "30") or 30)
+        except ValueError:
+            timeout = 30.0
         return cls(
             jwt_secret=key,
             jwt_public_key_pem=public_key,
@@ -93,6 +108,10 @@ class Settings:
             jwt_audience=os.getenv("JWT_AUDIENCE", "druid-mcp"),
             allowed_origins=origins,
             dev_fake_clients=os.getenv("DRUID_MCP_DEV_FAKE_CLIENTS") == "1",
+            retrieval_url=os.getenv("RETRIEVAL_URL", "").rstrip("/"),
+            document_api_url=os.getenv("DOCUMENT_API_URL", "").rstrip("/"),
+            internal_secret=os.getenv("INTERNAL_SECRET", ""),
+            downstream_timeout_seconds=timeout,
         )
 
 
@@ -260,17 +279,48 @@ def _register_tools(mcp: FastMCP, deps: tool_impls.ServiceDeps) -> None:
 
 
 def _default_deps(settings: Settings) -> tool_impls.ServiceDeps:
-    if not settings.dev_fake_clients:
-        raise RuntimeError(
-            "No service clients configured. In production the gateway/operator "
-            "wires real RetrievalServiceClient / IngestionServiceClient / "
-            "CatalogClient implementations here. Set "
-            "DRUID_MCP_DEV_FAKE_CLIENTS=1 for local development only."
+    if settings.dev_fake_clients:
+        log.warning(
+            "mcp_server using in-memory fake service clients "
+            "(DRUID_MCP_DEV_FAKE_CLIENTS=1): tests/dev only, never real data"
         )
+        return tool_impls.ServiceDeps(
+            retrieval=InMemoryRetrievalClient(),
+            ingestion=InMemoryIngestionClient(),
+            catalog=InMemoryCatalogClient(),
+        )
+    missing = [
+        name
+        for name, value in (
+            ("RETRIEVAL_URL", settings.retrieval_url),
+            ("DOCUMENT_API_URL", settings.document_api_url),
+            ("INTERNAL_SECRET", settings.internal_secret),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "Real downstream clients requested but misconfigured; missing: "
+            + ", ".join(missing)
+            + ". Set DRUID_MCP_DEV_FAKE_CLIENTS=1 for local development only."
+        )
+    timeout = settings.downstream_timeout_seconds
     return tool_impls.ServiceDeps(
-        retrieval=InMemoryRetrievalClient(),
-        ingestion=InMemoryIngestionClient(),
-        catalog=InMemoryCatalogClient(),
+        retrieval=HttpRetrievalClient(
+            base_url=settings.retrieval_url,
+            internal_secret=settings.internal_secret,
+            timeout=timeout,
+        ),
+        ingestion=HttpIngestionClient(
+            base_url=settings.document_api_url,
+            internal_secret=settings.internal_secret,
+            timeout=timeout,
+        ),
+        catalog=HttpCatalogClient(
+            base_url=settings.document_api_url,
+            internal_secret=settings.internal_secret,
+            timeout=timeout,
+        ),
     )
 
 
@@ -287,12 +337,16 @@ def create_app(
     deps = deps or _default_deps(settings)
     log.info(
         "starting mcp_server (streamable http): jwt_algs=%s jwt_issuer=%s "
-        "jwt_audience=%s allowed_origins=%d dev_fake_clients=%s",
+        "jwt_audience=%s allowed_origins=%d dev_fake_clients=%s "
+        "retrieval_url=%s document_api_url=%s downstream_timeout=%ss",
         ",".join(settings.jwt_algorithms),
         settings.jwt_issuer,
         settings.jwt_audience,
         len(settings.allowed_origins),
         settings.dev_fake_clients,
+        settings.retrieval_url or "-",
+        settings.document_api_url or "-",
+        settings.downstream_timeout_seconds,
     )
 
     mcp = FastMCP("new-druid")
