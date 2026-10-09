@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -33,6 +34,8 @@ from settings import DocumentApiSettings
 from storage import ObjectStore
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
 
 #: Role required to resolve quarantine items (§11 transport security).
 REVIEWER_ROLE = "reviewer"
@@ -107,6 +110,13 @@ def resolve_review_item(
 ):
     """Accept / re-route / reject a quarantined page. Reviewer role required."""
     if not context.has_role(REVIEWER_ROLE):
+        log.warning(
+            "review resolve denied → 403: item=%s user=%s group=%s request_id=%s",
+            item_id,
+            context.user_id,
+            context.group_id,
+            context.request_id,
+        )
         raise HTTPException(
             status_code=403, detail="resolving review items requires the reviewer role"
         )
@@ -120,13 +130,43 @@ def resolve_review_item(
         session.commit()
     except NotFoundError:
         session.rollback()
+        log.info(
+            "review resolve → 404: item=%s user=%s request_id=%s",
+            item_id,
+            context.user_id,
+            context.request_id,
+        )
         raise HTTPException(status_code=404, detail="not found")
     except ConflictError as exc:
         session.rollback()
+        log.warning(
+            "review resolve → 409: item=%s user=%s request_id=%s: %s",
+            item_id,
+            context.user_id,
+            context.request_id,
+            exc,
+        )
         raise HTTPException(status_code=409, detail=str(exc))
     except AuthorizationError as exc:
         session.rollback()
+        log.warning(
+            "review resolve → 403: item=%s user=%s request_id=%s: %s",
+            item_id,
+            context.user_id,
+            context.request_id,
+            exc,
+        )
         raise HTTPException(status_code=403, detail=str(exc))
+    log.info(
+        "review resolved: item=%s decision=%s status=%s reviewed_by=%s "
+        "group=%s request_id=%s",
+        item.id,
+        body.decision,
+        item.status,
+        context.user_id,
+        context.group_id,
+        context.request_id,
+    )
     return ResolveReviewResponse(
         item_id=str(item.id), status=item.status, reviewed_by=context.user_id
     )

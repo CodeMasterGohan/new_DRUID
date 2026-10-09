@@ -123,3 +123,53 @@ class ResolveReviewResponse(BaseModel):
     item_id: str
     status: str
     reviewed_by: str
+
+
+# ---------------------------------------------------------------------------
+# Admin (cross-tenant operator views, §16 web_ui; admin role required)
+# ---------------------------------------------------------------------------
+
+
+class AdminDocumentSummary(BaseModel):
+    document_id: str
+    display_name: str
+    group_id: str
+    status: str | None  # latest version's ingestion state; None if no version
+    updated_at: datetime
+
+
+class AdminDocumentListResponse(BaseModel):
+    documents: list[AdminDocumentSummary]
+    limit: int
+    offset: int
+
+
+class AdminJobSummary(BaseModel):
+    job_id: str
+    group_id: str
+    job_type: str
+    state: str
+    attempt_count: int
+    error: str | None  # excerpt (truncated); full text stays in the catalog
+    document_id: str | None
+    created_at: datetime
+    updated_at: datetime
+    duration_seconds: float | None  # updated_at - created_at; None if unset
+
+
+class AdminJobListResponse(BaseModel):
+    jobs: list[AdminJobSummary]
+    limit: int
+    offset: int
+
+
+class AdminTenantQuota(BaseModel):
+    group_id: str
+    ingest_pages_used: int | None  # None when the counter backend is unreachable
+    ingest_pages_limit: int
+    query_qps: int | None  # queries in the current 1s sliding window
+    query_qps_limit: int
+
+
+class AdminQuotaListResponse(BaseModel):
+    tenants: list[AdminTenantQuota]

@@ -51,3 +51,10 @@ class DocumentApiSettings(BaseSettings):
     # --- upload limits (§4 quotas) ---
     max_upload_mb: int = 200
     max_pages_per_document: int = 2000
+
+    # --- quota limits mirrored from the gateway (§4, admin views) ---
+    # Must match the gateway's QUOTA_INGEST_PAGES_PER_DAY / QUOTA_QUERY_QPS:
+    # the admin quotas endpoint reads usage from the gateway's Redis
+    # counters and reports it against these configured defaults.
+    quota_ingest_pages_per_day: int = 1000
+    quota_query_qps: int = 10

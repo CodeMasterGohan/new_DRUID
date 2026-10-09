@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -54,6 +56,8 @@ from validation import (
 )
 
 router = APIRouter()
+
+log = logging.getLogger(__name__)
 
 _READ_CHUNK_SIZE = 1024 * 1024  # 1 MiB streaming reads
 
@@ -158,6 +162,13 @@ async def upload_document(
     repo = CatalogRepository(session, context)
     max_bytes = settings.max_upload_mb * 1024 * 1024
     stored_keys: list[str] = []
+    started = time.monotonic()
+    log.info(
+        "upload start: filename=%r group=%s request_id=%s",
+        _safe_display_name(file.filename),
+        context.group_id,
+        context.request_id,
+    )
 
     try:
         data = await _read_bounded(file, max_bytes)
@@ -210,10 +221,30 @@ async def upload_document(
                 job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
             )
             session.commit()
+            log.error(
+                "upload enqueue failed: job=%s document=%s group=%s request_id=%s: %s",
+                job.id,
+                doc.id,
+                context.group_id,
+                context.request_id,
+                exc,
+            )
             raise HTTPException(
                 status_code=500, detail=f"upload stored but job enqueue failed: {exc}"
             )
 
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        log.info(
+            "upload finish: document=%s version=%s job=%s pages=%d group=%s "
+            "request_id=%s in %.1fms",
+            doc.id,
+            version.id,
+            job.id,
+            page_count,
+            context.group_id,
+            context.request_id,
+            elapsed_ms,
+        )
         return UploadResponse(
             document_id=str(doc.id),
             job_id=str(job.id),
@@ -229,8 +260,17 @@ async def upload_document(
         for k in stored_keys:  # best-effort cleanup of orphaned bytes
             try:
                 store.delete_prefix(k)
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                log.debug(
+                    "upload cleanup: delete_prefix(%r) failed: %s", k, cleanup_exc
+                )
+        log.warning(
+            "upload rejected: %s (%s) group=%s request_id=%s",
+            type(exc).__name__,
+            exc,
+            context.group_id,
+            context.request_id,
+        )
         raise _to_http(exc)
     except HTTPException:
         session.rollback()
@@ -240,8 +280,15 @@ async def upload_document(
         for k in stored_keys:
             try:
                 store.delete_prefix(k)
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                log.debug(
+                    "upload cleanup: delete_prefix(%r) failed: %s", k, cleanup_exc
+                )
+        log.exception(
+            "upload failed: group=%s request_id=%s",
+            context.group_id,
+            context.request_id,
+        )
         raise HTTPException(status_code=500, detail=f"upload failed: {exc}")
 
 
@@ -328,6 +375,13 @@ def delete_document(
     except NotFoundError as exc:
         raise _to_http(exc)
 
+    context = repo.context
+    log.info(
+        "delete start: document=%s group=%s request_id=%s",
+        document_id,
+        context.group_id,
+        context.request_id,
+    )
     try:
         job = create_deletion_job(repo, document_id=doc.id,
                                   queue_name=settings.delete_queue)
@@ -339,6 +393,13 @@ def delete_document(
         if existing is None:  # pragma: no cover - cannot happen post-conflict
             raise HTTPException(status_code=409,
                                 detail="deletion already queued for this document")
+        log.info(
+            "delete deduped: document=%s existing_job=%s group=%s request_id=%s",
+            doc.id,
+            existing.id,
+            context.group_id,
+            context.request_id,
+        )
         return DeleteResponse(
             document_id=str(doc.id),
             job_id=str(existing.id),
@@ -352,8 +413,23 @@ def delete_document(
         repo.update_job_state(job.id, IngestionState.FAILED,
                               error=f"enqueue failed: {exc}")
         session.commit()
+        log.error(
+            "delete enqueue failed: job=%s document=%s group=%s request_id=%s: %s",
+            job.id,
+            doc.id,
+            context.group_id,
+            context.request_id,
+            exc,
+        )
         raise HTTPException(status_code=500,
                             detail=f"deletion authorized but enqueue failed: {exc}")
+    log.info(
+        "delete finish: document=%s job=%s group=%s request_id=%s",
+        doc.id,
+        job.id,
+        context.group_id,
+        context.request_id,
+    )
     return DeleteResponse(
         document_id=str(doc.id), job_id=str(job.id), status=job.state.value
     )
