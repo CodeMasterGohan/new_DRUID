@@ -38,7 +38,7 @@ object keys are tenant-scoped
 
 Multipart upload. Server-side: magic-byte MIME sniff, size cap streamed
 at 1 MiB, PDF trailer page count, sha256, opaque UUIDs, tenant-scoped
-MinIO key, commit-before-enqueue, enqueue failure parks the job as
+RustFS key, commit-before-enqueue, enqueue failure parks the job as
 `FAILED`.
 
 Response `UploadResponse`:
