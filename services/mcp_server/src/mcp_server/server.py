@@ -18,7 +18,9 @@ own explicit trusted credential context. Gateway headers never apply to it.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
@@ -47,6 +49,8 @@ from .models import (
     ResolveReviewItemArgs,
     SearchArgs,
 )
+
+log = logging.getLogger(__name__)
 
 # Headers that must never influence identity. Stripped defensively even
 # though nothing in this service reads them.
@@ -103,6 +107,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
+        started = time.monotonic()
         # 1. Strip spoofable identity headers (defense in depth; unread anyway).
         for name in _SPOOFABLE_IDENTITY_HEADERS:
             if name in request.headers:
@@ -118,12 +123,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # 2. Origin validation (DNS-rebinding protection for browser clients).
         origin = request.headers.get("origin")
         if origin and origin not in self._allowed_origins:
+            log.warning(
+                "mcp auth → 403: origin %r not allowlisted path=%s",
+                origin,
+                request.url.path,
+            )
             return JSONResponse({"error": "origin not allowed"}, status_code=403)
 
         # 3. Bearer token validation. Fail closed on anything unexpected.
         auth = request.headers.get("authorization", "")
         scheme, _, token = auth.partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
+            log.warning(
+                "mcp auth → 401: missing or malformed Authorization header path=%s",
+                request.url.path,
+            )
             return JSONResponse(
                 {"error": "missing or malformed Authorization header"},
                 status_code=401,
@@ -131,15 +145,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             claims = self._verifier.verify(token.strip())
         except AuthError as exc:
+            log.warning("mcp auth → 401: %s path=%s", exc, request.url.path)
             return JSONResponse({"error": str(exc)}, status_code=401)
 
         # 4. Install the validated context for this request only.
         ctx = context_from_claims(claims)
         token_handle = set_context(ctx)
         try:
-            return await call_next(request)
+            response = await call_next(request)
         finally:
             clear_context(token_handle)
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        log.info(
+            "mcp request: %s %s → %d in %.1fms group=%s request_id=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+            ctx.group_id,
+            ctx.request_id,
+        )
+        return response
 
 
 def _register_tools(mcp: FastMCP, deps: tool_impls.ServiceDeps) -> None:
@@ -259,6 +285,15 @@ def create_app(
             "JWT_SECRET (HS256) or JWT_PUBLIC_KEY_PEM (RS256) is required"
         )
     deps = deps or _default_deps(settings)
+    log.info(
+        "starting mcp_server (streamable http): jwt_algs=%s jwt_issuer=%s "
+        "jwt_audience=%s allowed_origins=%d dev_fake_clients=%s",
+        ",".join(settings.jwt_algorithms),
+        settings.jwt_issuer,
+        settings.jwt_audience,
+        len(settings.allowed_origins),
+        settings.dev_fake_clients,
+    )
 
     mcp = FastMCP("new-druid")
     _register_tools(mcp, deps)

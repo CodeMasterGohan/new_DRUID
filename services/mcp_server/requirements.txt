@@ -1,4 +1,7 @@
 # Pinned 2026-10-08 — regenerate with pip-compile before release. Python 3.11+.
+# VERIFIED 2026-10-08: pip-compile (pip-tools 7.6.2, PyPI metadata) resolves
+# this pin set to a consistent closure with all direct == pins honored.
+# Regenerate the locked file on the 3.11 image target before release.
 # mcp = MCP Python SDK (includes FastMCP). Pins below are the versions the
 # MCP server implementation was built and contract-tested against.
 mcp==1.12.0
