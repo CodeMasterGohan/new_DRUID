@@ -24,18 +24,18 @@ Image: `postgres:16.6-alpine`.
 
 Image: `redis:7.4.2-alpine` with `--appendonly yes`.
 
-## MinIO (tenant-scoped object storage)
+## RustFS (S3-compatible object storage)
 
 | Variable | Default | Notes |
 |---|---|---|
-| `MINIO_ROOT_USER` | `druid` | |
-| `MINIO_ROOT_PASSWORD` | `change-me-min-8-chars` | **Secret** (min 8 chars) |
-| `MINIO_ENDPOINT` | `minio:9000` | |
-| `MINIO_BUCKET` | `druid-artifacts` | |
+| `RUSTFS_ACCESS_KEY` | `druid` | |
+| `RUSTFS_SECRET_KEY` | `change-me-min-8-chars` | **Secret** (min 8 chars) |
+| `RUSTFS_ENDPOINT` | `rustfs:9000` | |
+| `RUSTFS_BUCKET` | `druid-artifacts` | |
 
-Milvus shares this MinIO (separate bucket) instead of running its own.
-Image tag is `minio/minio:latest` — pin a dated RELEASE tag at deploy
-(see [Troubleshooting](druid-troubleshooting.html)).
+Milvus shares this RustFS (separate bucket) instead of running its own.
+Image is `rustfs/rustfs:1.0.1` (pinned). The `minio` Python client works
+against it unmodified.
 
 ## Milvus
 

@@ -20,7 +20,7 @@ cp .env.example .env        # fill secrets; never commit a filled .env
 docker network create druid-net
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d postgres redis minio etcd milvus
+docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
 
 # 2. Schema + migrations (one-shot jobs, must exit 0)
 docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
@@ -39,7 +39,7 @@ curl -f http://localhost:8000/health   # vLLM health (VLLM_PORT)
 
 | Project | File | Services | Notes |
 |---|---|---|---|
-| `druid` (CPU) | `deploy/docker-compose.yml` | postgres, redis, minio, etcd, milvus, one-shot catalog + milvus_setup, gateway, document_api, mcp_server, web_ui, embedding, retrieval, ingestion (scalable) | Container images are `python:3.11-slim` builds from each service dir |
+| `druid` (CPU) | `deploy/docker-compose.yml` | postgres, redis, rustfs, etcd, milvus, one-shot catalog + milvus_setup, gateway, document_api, mcp_server, web_ui, embedding, retrieval, ingestion (scalable) | Container images are `python:3.11-slim` builds from each service dir |
 | `druid-gpu` | `deploy/docker-compose.gpu.yml` | vllm-olmocr | nvidia device reservation, count 1 |
 
 Notable wiring (all verified by `tests/test_deploy_wiring.py`):
@@ -102,7 +102,7 @@ must start cleanly and serve.
 
 ```bash
 # Gateway rejects unauthenticated requests
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 401/403
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/healthz   # expect 401/403
 
 # Milvus collection exists with the alias
 # via milvus_setup logs or: utility.has_collection("project_knowledge_base_v1")
@@ -120,7 +120,7 @@ curl http://localhost:8000/v1/models   # expect served-model-name olmocr-2-fp8
   ~0.5–1.0 KB + BM25 ~1–2 KB + metadata ~2–4 KB); per page-image record
   ≈ 4 KB.
 - Worked example (5M chunks + 200K page images): Milvus ≈ 43 GB,
-  PostgreSQL ≈ 5 GB, MinIO sized from corpus × 2 headroom, vLLM host-side
+  PostgreSQL ≈ 5 GB, RustFS sized from corpus × 2 headroom, vLLM host-side
   ≈ 4 GB, OS page cache + headroom ≈ 16 GB → **≥ 96 GB host RAM
   (128 GB comfortable)**. GPU memory is not part of this budget.
 - Scaling rule of thumb: ~8 KB host RAM per text chunk (10M chunks ≈

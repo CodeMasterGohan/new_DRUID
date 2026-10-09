@@ -116,11 +116,12 @@ FP8 kernels. Also verify the image ships `curl`: the healthcheck is
 
 ## Image and dependency notes
 
-### MinIO tag unpinned
+### Object storage: RustFS (replaced MinIO)
 
-Compose uses `minio/minio:latest` with a TODO to pin a dated RELEASE tag
-at deploy time (the tag could not be verified offline). Pin it before
-production.
+MinIO's community edition was archived in 2026 (no new images, Docker Hub
+repos deleted), so the stack now uses `rustfs/rustfs:1.0.1` (pinned,
+S3-compatible, Apache 2.0). The `minio` Python client talks to it
+unmodified. Health endpoint: `http://localhost:9000/health`.
 
 ### Dependency pins are initial lockfiles
 
@@ -160,7 +161,7 @@ hand; build the corpus first.
 
 1. `docker network create druid-net` before `up`.
 2. Secrets filled in `.env` (`INTERNAL_SECRET`, `JWT_SECRET`,
-   `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`); template values are not
+   `POSTGRES_PASSWORD`, `RUSTFS_SECRET_KEY`); template values are not
    secrets.
 3. Model checkpoints staged at `$MODEL_DIR` per the manifests.
 4. One-shot `catalog` + `milvus_setup` jobs exit 0 before starting

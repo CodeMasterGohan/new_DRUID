@@ -3,7 +3,7 @@
 A thin human layer over the gateway/document_api: FastAPI + Jinja2
 server-rendered templates + **htmx 2.0.4 vendored** in the image (no CDN,
 per the offline network policy). The UI talks **only** to the gateway
-with your own Bearer `<redacted>` — no direct Postgres, Milvus, or MinIO
+with your own Bearer `<redacted>` — no direct Postgres, Milvus, or RustFS
 access. Tenant scoping is enforced downstream; the UI adds no new data
 paths.
 

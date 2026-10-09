@@ -18,7 +18,7 @@ clients (Web UI / AI agent / CLI / browser)
   → embedding service (EmbeddingGemma 2, CPU, port 8003)
   → retrieval service (port 8004; hybrid search + MiniLM rerank, CPU)
   → Milvus standalone v2.5.6 (dense 768-dim + BM25 hybrid, group_id partition key)
-  → MinIO (tenant-scoped object storage: originals / renders / trees)
+  → RustFS (tenant-scoped object storage: originals / renders / trees)
   → vllm-olmocr (GPU plane; ONLY GPU consumer) ── 8000 (separate compose project)
 ```
 
@@ -38,7 +38,7 @@ payload `druid-v1|user|group|roles_sorted_csv|request_id`, signature
 ### document_api (port 8001)
 Document + review-queue API, always behind the gateway. Routes:
 upload (multipart, magic-byte MIME sniff, size cap streamed, PDF trailer
-page count, sha256, tenant-scoped MinIO keys, commit-before-enqueue),
+page count, sha256, tenant-scoped RustFS keys, commit-before-enqueue),
 list/get/delete/status, review items + resolve, admin routes.
 Verifies the gateway's `X-Druid-*` HMAC signature on every request and
 fails closed without it.
@@ -110,7 +110,7 @@ Standalone CPU FastAPI service for EmbeddingGemma 2 (text+image,
 Matryoshka 768 — validated widths 768/512/256/128). Reuses the ingestion
 sibling's prefix contract module (byte-equality asserted by test).
 `POST /embed` (documents + queries), `POST /embed_image` (b64 PNG →
-unified-space vector; `object_key` variant returns 501 until MinIO wiring
+unified-space vector; `object_key` variant returns 501 until RustFS wiring
 lands at deploy time), `GET /health`. Lifespan warmup forces backend load:
 missing artifacts fail startup loudly. The ST backend is coded but has
 never run against real EmbeddingGemma 2 weights (needs the H200 host).
@@ -151,13 +151,13 @@ under `manifests/completed/`.
 ### web_ui (port 8005)
 FastAPI + Jinja2 + vendored htmx 2.0.4 (no CDN, offline-first). Thin human
 layer: talks only to the gateway with the user's own Bearer `<redacted>` (no
-direct Postgres/Milvus/MinIO). Paste-provisioned-JWT login; dark mode
+direct Postgres/Milvus/RustFS). Paste-provisioned-JWT login; dark mode
 default. See [Web UI](druid-web-ui.html).
 
 ## Ingest data flow
 
 ```
-upload (gateway quota-check → document_api: validate, store in MinIO,
+upload (gateway quota-check → document_api: validate, store in RustFS,
         catalog row, durable job, RQ enqueue)
   → ingestion worker (RQ `ingest` queue, rebuilds trusted context from job row)
   → native extraction / router / olmOCR / tree / chunker / embed / Milvus
