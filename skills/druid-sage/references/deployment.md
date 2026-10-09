@@ -22,7 +22,7 @@ cp .env.example .env            # fill secrets
 docker network create druid-net # once per host; shared by CPU + GPU compose projects
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d postgres redis minio etcd milvus
+docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
 
 # 2. One-shot schema/setup jobs (must exit 0)
 docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
@@ -44,21 +44,20 @@ loaded read-only, no download); gateway health/ auth checks; Milvus collection
 
 | Service | Host port |
 |---|---|
-| gateway | 8000 |
+| gateway | 8080 (container 8000) |
 | document_api | 8001 |
 | mcp_server | 8002 |
 | embedding | 8003 |
 | retrieval | 8004 |
 | **web_ui** | **8005** |
-| vLLM/olmOCR | 8000 by default — **remap in `.env` (see gap below)** |
-| MinIO API / console | 9000 / 9001 |
+| vLLM/olmOCR | 8000 |
+| RustFS API / console | 9000 / 9001 |
 | Milvus | 19530 (API), 9091 (mgmt) |
 
-**Source gap:** both `VLLM_PORT` and `GATEWAY_PORT` default to `8000` in the
-sources, and the runbook's vLLM smoke check (`localhost:8000/health`) collides
-with the gateway. At deploy time, remap one of them in `.env` (e.g.
-`VLLM_PORT=8100`) and confirm which port the vLLM check should hit before
-running the smoke tests.
+**Resolved 2026-10-09:** `GATEWAY_PORT` now defaults to `8080` in
+`deploy/docker-compose.yml` (matching `.env.example`); vLLM keeps host port
+8000. The runbook's vLLM smoke check (`localhost:8000/health`) hits vLLM;
+the gateway smoke check (`localhost:8080/healthz`) hits the gateway.
 
 ## GPU arbitration (new_DRUID)
 
@@ -68,7 +67,7 @@ running the smoke tests.
   The BF16 checkpoint is approved for fine-tuning only, never serving.
 - Everything else — EmbeddingGemma 2 service (text+image config), MiniLM
   reranker, ingestion workers, Milvus, API services — runs on **CPU/host RAM**.
-- The H200's 141 GB is GPU memory. Milvus/Postgres/MinIO/vLLM host-side all live
+- The H200's 141 GB is GPU memory. Milvus/Postgres/RustFS/vLLM host-side all live
   in host RAM: plan **≥96 GB host RAM** (128 GB comfortable) and NVMe sized to
   the corpus ×2. Rough rule: ~8 KB host RAM per text chunk, ~4 KB per
   page-image record.
@@ -94,10 +93,14 @@ Stage into `$MODEL_DIR` (default `/models`), read-only mounts in compose:
 - One compose stack; deploy decision (James, 2026-10-08): run on the H200 box
   alongside new_DRUID — tiny CPU-only footprint, one box to manage.
 - **No auth** (bind localhost/Tailscale interface only); Origin check only.
-- Default host ports: mcp_server `8000` (internal 8000), retrieval internal
-  `8001`, embedding internal `8002`; MinIO 9000/9001, Milvus 19530/9091.
-- **Source gap:** New_sage's default host port `8000` collides with new_DRUID's
-  gateway `8000` on the same box. Remap `MCP_HOST_PORT` for one of them at
-  deploy time.
+- Default host ports: mcp_server `8010` (container 8000), retrieval `8011`
+  (container 8001), embedding `8012` (container 8002), RustFS `9010`/`9011`
+  (container 9000/9001), Milvus `19531`/`9092` (container 19530/9091),
+  postgres `5433` (container 5432), redis `6380` (container 6379).
+  Container ports are the §13 contract and are unchanged.
+- **Resolved 2026-10-09:** New_sage's default host ports used to collide
+  with new_DRUID's (both defaulted mcp to host 8000, etc.). They were moved
+  to the 8010/9010/19531 block, so the two stacks no longer collide on the
+  same box. `${*_HOST_PORT}` still overrides any of them in `.env`.
 - Maintenance is fully automated by design: weekly refresh sweep + monthly
   DevDocs image sync are scheduled jobs in the stack — nothing manual.

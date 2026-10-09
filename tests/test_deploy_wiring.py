@@ -13,6 +13,14 @@ import yaml
 
 BUILD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+# New_sage's build tree lives next to new_DRUID's (~/workspace/new_sage/build).
+# Override with NEW_SAGE_BUILD_ROOT if the layout differs. The cross-project
+# tests skip when the sage tree is absent (the repos push independently).
+SAGE_BUILD_ROOT = os.environ.get(
+    "NEW_SAGE_BUILD_ROOT",
+    os.path.abspath(os.path.join(BUILD_ROOT, "..", "..", "new_sage", "build")),
+)
+
 
 def load_compose():
     with open(os.path.join(BUILD_ROOT, "deploy", "docker-compose.yml")) as f:
@@ -35,6 +43,90 @@ def load_env_example():
 def read_dockerfile(service):
     with open(os.path.join(BUILD_ROOT, "services", service, "Dockerfile")) as f:
         return f.read()
+
+
+# ── host-port helpers ──────────────────────────────────────────────────
+# Compose ships `${VAR:-default}:container` entries; deployment copies
+# .env.example to .env, so an explicit entry there is the effective port.
+_PORT_REF = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _resolve_host_part(host_part, env):
+    m = _PORT_REF.fullmatch(host_part)
+    if m:
+        var, default = m.group(1), m.group(2)
+        if var in env:
+            return env[var].strip()
+        return (default or "").strip()
+    return host_part.strip()
+
+
+def effective_host_ports(compose, env):
+    """(service, host_port) pairs for every published port, resolved the
+    way deployment sees them (.env.example values override compose defaults)."""
+    pairs = []
+    for name, svc in compose.get("services", {}).items():
+        for entry in svc.get("ports") or []:
+            host_part = str(entry).rsplit(":", 1)[0]
+            host_port = _resolve_host_part(host_part, env)
+            pairs.append((name, host_port))
+    return pairs
+
+
+def compose_files():
+    """(label, compose_dict, env_vars) for every stack on the shared host."""
+    files = []
+    cpu = load_compose()
+    env = load_env_example()
+    files.append(("druid-cpu", cpu, env))
+    with open(os.path.join(BUILD_ROOT, "deploy", "docker-compose.gpu.yml")) as f:
+        files.append(("druid-gpu", yaml.safe_load(f), env))
+    sage_compose = os.path.join(SAGE_BUILD_ROOT, "deploy", "docker-compose.yml")
+    if os.path.exists(sage_compose):
+        sage_env = {}
+        sage_env_example = os.path.join(SAGE_BUILD_ROOT, "deploy", ".env.example")
+        if os.path.exists(sage_env_example):
+            for line in open(sage_env_example):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    sage_env[k.strip()] = v.strip()
+        with open(sage_compose) as f:
+            files.append(("sage", yaml.safe_load(f), sage_env))
+    return files
+
+
+def test_no_host_port_collision_within_compose_files():
+    """Within one compose project every published host port must be unique
+    (2026-10-09: gateway 8080 / vLLM 8000 both bind the same host)."""
+    for label, compose, env in compose_files():
+        pairs = effective_host_ports(compose, env)
+        seen = {}
+        for service, port in pairs:
+            assert port, f"{label}: {service} published an unresolvable host port"
+            if port in seen:
+                pytest.fail(
+                    f"{label}: host port {port} published by both "
+                    f"{seen[port]} and {service}")
+            seen[port] = service
+
+
+def test_no_host_port_collision_across_druid_and_sage():
+    """Both stacks run on James's H200 box: no two services in DIFFERENT
+    compose projects may publish the same host port. Sage moved to the
+    8010/9010/19531 host block (2026-10-09) precisely for this."""
+    files = compose_files()
+    labels = {label for label, _, _ in files}
+    if "sage" not in labels:
+        pytest.skip(f"new_sage tree not found at {SAGE_BUILD_ROOT}")
+    owners = {}
+    for label, compose, env in files:
+        for service, port in effective_host_ports(compose, env):
+            key = f"{label}/{service}"
+            if port in owners and owners[port] != key:
+                pytest.fail(
+                    f"host port {port} published by both {owners[port]} and {key}")
+            owners.setdefault(port, key)
 
 
 def test_compose_services_have_dockerfiles():

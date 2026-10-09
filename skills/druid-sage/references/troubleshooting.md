@@ -114,7 +114,7 @@ The builds were tested green on the build VM (2026-10-08/09), but these were
 - Docker images were never built (no Docker on the build VM).
 - Dependency pins are initial, not pip-compile-verified (new_DRUID scaffold;
   mcp_server pins were verified for that service only).
-- MinIO image tag is `latest` with a TODO to pin a dated RELEASE tag.
+- Object storage is RustFS (`rustfs/rustfs:1.0.1`, pinned) — MinIO community was archived in 2026.
 - No live-infra run on the H200 yet: model staging, full corpus ingestion,
   offline-egress test, quota burn-in, and GPU-arbitration measurement are all
   still ahead.
