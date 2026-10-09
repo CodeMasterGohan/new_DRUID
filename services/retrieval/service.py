@@ -8,6 +8,7 @@ the dense, BM25, and identifier branches.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from services.common.request_context import RequestContext
@@ -63,9 +64,16 @@ class RetrievalService:
     ) -> list[SearchResult]:
         """Execute the §10 search sequence. Fails closed on bad context."""
         cfg = self._config
+        started = time.monotonic()
 
         # 1. Validate caller context — missing/invalid fails closed.
         ctx = validate_context(context)
+        log.info(
+            "search start: group=%s request_id=%s query_chars=%d",
+            ctx.group_id,
+            ctx.request_id,
+            len(query),
+        )
 
         # 2-3. Tenant predicate + catalog hard filter (never index state).
         allowed = self._catalog.allowed_versions(ctx)
@@ -125,6 +133,15 @@ class RetrievalService:
             key=lambda c: c.fusion_score,
             reverse=True,
         )[: cfg.max_page_image_results]
+        if image_records:
+            # Fallback path: page-image records carry no rerankable text, so
+            # they bypass the cross-encoder and re-enter by fusion score.
+            log.info(
+                "reranker bypass: %d page-image record(s) re-enter by fusion "
+                "score (request_id=%s)",
+                len(image_records),
+                ctx.request_id,
+            )
 
         ordered: list[tuple[FusedCandidate, float | None]] = [
             (cand, score) for cand, score in reranked
@@ -144,15 +161,31 @@ class RetrievalService:
         # 11. Reconcile with catalog state (race safety: a version may have
         # been deactivated between step 3 and now).
         fresh_allowed = self._catalog.allowed_versions(ctx)
+        before_reconcile = len(results)
         results = [
             r
             for r in results
             if (r.document_id, r.document_version) in fresh_allowed
         ]
+        if len(results) != before_reconcile:
+            log.info(
+                "reconciliation dropped %d result(s) deactivated mid-search "
+                "(request_id=%s)",
+                before_reconcile - len(results),
+                ctx.request_id,
+            )
         # Re-number ranks after reconciliation filtering.
         for rank, r in enumerate(results, start=1):
             r.rank = rank
 
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        log.info(
+            "search finish: %d results in %.1fms group=%s request_id=%s",
+            len(results),
+            elapsed_ms,
+            ctx.group_id,
+            ctx.request_id,
+        )
         # 12. Provenance-tagged results per the §10 contract.
         return results
 

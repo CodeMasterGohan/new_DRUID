@@ -13,12 +13,15 @@ the hard filter will exclude everything.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from services.common.request_context import RequestContext
 
 from .errors import DependencyError
 from .interfaces import CatalogSearchPort
+
+log = logging.getLogger(__name__)
 
 
 class SqlAlchemyCatalogPort(CatalogSearchPort):
@@ -43,6 +46,11 @@ class SqlAlchemyCatalogPort(CatalogSearchPort):
             repo = CatalogRepository(session, context)
             versions = repo.list_searchable_versions()
         except Exception as exc:
+            log.warning(
+                "catalog hard-filter query failed for group=%s: %s",
+                context.group_id,
+                exc,
+            )
             raise DependencyError(f"catalog hard-filter query failed: {exc}") from exc
         finally:
             close = getattr(session, "close", None)

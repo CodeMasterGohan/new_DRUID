@@ -72,6 +72,18 @@ def wire(service: RetrievalService) -> None:
     """Inject the fully-constructed RetrievalService (done at startup)."""
     global _service
     _service = service
+    cfg = service._config
+    log.info(
+        "starting retrieval service: embedding_dim=%d dense=%d lexical=%d "
+        "identifier=%d rerank=%d final=%d expand_neighbors=%s",
+        cfg.embedding_dimension,
+        cfg.dense_candidates,
+        cfg.lexical_candidates,
+        cfg.identifier_candidates,
+        cfg.rerank_candidates,
+        cfg.final_results,
+        cfg.expand_neighbors,
+    )
 
 
 @app.post("/search")
@@ -99,6 +111,10 @@ async def search(
     try:
         body = await request.json()
     except Exception:
+        log.warning(
+            "search rejected → 400: invalid JSON body request_id=%s",
+            x_druid_request_id or "-",
+        )
         raise HTTPException(status_code=400, detail="invalid JSON body")
     query = (body.get("query") or "").strip()
     if not query:
