@@ -1,0 +1,9 @@
+# Build context hygiene for all service images (compose build context is
+# the build root). Keeps dev-only files and secrets out of image layers.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+.env
+.git/

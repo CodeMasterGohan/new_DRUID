@@ -44,4 +44,14 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+    networks:
+      # Shared with the cpu project so ingestion workers resolve
+      # `vllm-olmocr` by service name. Create once:
+      #   docker network create druid-net
+      - druid-net
     restart: unless-stopped
+
+networks:
+  druid-net:
+    name: druid-net
+    external: true
