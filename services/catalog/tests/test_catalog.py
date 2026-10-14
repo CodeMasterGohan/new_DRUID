@@ -303,6 +303,26 @@ def test_quarantine_resolve_requires_reviewer_role(session):
     assert resolved.reviewed_by == "user-1"
 
 
+def test_quarantine_resolve_allowed_for_admin_role(session):
+    make_tenant(session, "tenant-a")
+    repo_plain = CatalogRepository(session, make_context(roles=("reader",)))
+    doc, v = make_doc_with_version(session, repo_plain)
+    item = repo_plain.quarantine_page(
+        document_id=doc.id, document_version_id=v.id, job_id=None,
+        page_index=0, page_render_ref="r.png", parse_attempts={},
+        routing_diagnostics={},
+    )
+    repo_admin = CatalogRepository(
+        session, make_context(roles=("admin",))
+    )
+    resolved = repo_admin.resolve_quarantine_item(
+        item.id, decision="accepted", reviewed_by="admin-user",
+        detail={"chosen_parse": "fast"},
+    )
+    assert resolved.status == "accepted"
+    assert resolved.reviewed_by == "admin-user"
+
+
 def test_quarantine_item_is_tenant_scoped(session):
     make_tenant(session, "tenant-a")
     make_tenant(session, "tenant-b")

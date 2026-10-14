@@ -114,16 +114,21 @@ def context_from_claims(claims: TokenClaims) -> RequestContext:
 
 
 # Tool name -> roles permitted to invoke it. "admin" is a superset role that
-# is accepted everywhere a narrower role is.
+# is accepted everywhere a narrower role is. "user", "member", and "reader" are
+# accepted for read tools; "user" and "member" are accepted for mutations.
+_READ_ROLES = frozenset({"member", "user", "reader", "reviewer", "admin"})
+_MUTATION_ROLES = frozenset({"member", "user", "reviewer", "admin"})
+_REVIEW_ROLES = frozenset({"reviewer", "admin"})
+
 TOOL_ROLES: dict[str, frozenset[str]] = {
-    "search_knowledge_base": frozenset({"member", "reviewer", "admin"}),
-    "ingest_document": frozenset({"member", "reviewer", "admin"}),
-    "get_ingestion_status": frozenset({"member", "reviewer", "admin"}),
-    "list_documents": frozenset({"member", "reviewer", "admin"}),
-    "get_document": frozenset({"member", "reviewer", "admin"}),
-    "get_review_item": frozenset({"reviewer", "admin"}),
-    "resolve_review_item": frozenset({"reviewer", "admin"}),
-    "delete_document": frozenset({"member", "reviewer", "admin"}),
+    "search_knowledge_base": _READ_ROLES,
+    "ingest_document": _MUTATION_ROLES,
+    "get_ingestion_status": _READ_ROLES,
+    "list_documents": _READ_ROLES,
+    "get_document": _READ_ROLES,
+    "get_review_item": _REVIEW_ROLES,
+    "resolve_review_item": _REVIEW_ROLES,
+    "delete_document": _MUTATION_ROLES,
 }
 
 

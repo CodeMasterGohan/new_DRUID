@@ -1,7 +1,11 @@
 {% for p in passages %}
 <article class="passage">
   <header>
+    {% if p.provenance and p.provenance.document_id %}
+    <a href="/documents/{{ p.provenance.document_id }}"><strong>{{ p.provenance.filename }}</strong></a>
+    {% else %}
     <strong>{{ p.provenance.filename }}</strong>
+    {% endif %}
     <span class="muted">pages {{ p.provenance.page_start }}–{{ p.provenance.page_end }}</span>
   </header>
   <p>{{ p.text }}</p>

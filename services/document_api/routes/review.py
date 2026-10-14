@@ -37,8 +37,9 @@ router = APIRouter()
 
 log = logging.getLogger(__name__)
 
-#: Role required to resolve quarantine items (§11 transport security).
+#: Roles permitted to resolve quarantine items (§11 transport security).
 REVIEWER_ROLE = "reviewer"
+ADMIN_ROLE = "admin"
 
 
 def _to_summary(item) -> ReviewItemSummary:
@@ -108,8 +109,8 @@ def resolve_review_item(
     session: Session = Depends(get_session),
     context: RequestContext = Depends(get_trusted_context),
 ):
-    """Accept / re-route / reject a quarantined page. Reviewer role required."""
-    if not context.has_role(REVIEWER_ROLE):
+    """Accept / re-route / reject a quarantined page. Reviewer or admin role required."""
+    if not (context.has_role(REVIEWER_ROLE) or context.has_role(ADMIN_ROLE)):
         log.warning(
             "review resolve denied → 403: item=%s user=%s group=%s request_id=%s",
             item_id,
@@ -118,7 +119,7 @@ def resolve_review_item(
             context.request_id,
         )
         raise HTTPException(
-            status_code=403, detail="resolving review items requires the reviewer role"
+            status_code=403, detail="resolving review items requires the reviewer or admin role"
         )
     try:
         item = repo.resolve_quarantine_item(

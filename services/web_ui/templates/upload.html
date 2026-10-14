@@ -11,6 +11,7 @@
   <p>Drag &amp; drop files here, or <button type="button" id="browse">browse</button></p>
   <p class="muted">PDF, PNG, JPEG, WebP, TIFF</p>
   <input type="file" id="fileinput" multiple hidden
+         aria-label="Upload files"
          accept=".pdf,.png,.jpg,.jpeg,.webp,.tiff,.tif">
 </div>
 <ul id="uploads"></ul>
@@ -70,7 +71,12 @@
       return fetch('/upload/session/' + sid).then(function (r) { return r.json(); })
         .then(function (st) { return sendChunks(file, sid, total, st.received || [], prog); });
     }).then(function (result) {
-      prog.textContent = 'done — document ' + (result.document_id || '') + ' queued';
+      if (result && result.document_id) {
+        var docId = result.document_id;
+        prog.innerHTML = 'done — <a href="/documents/' + encodeURIComponent(docId) + '">document ' + docId + '</a> queued';
+      } else {
+        prog.textContent = 'done — queued';
+      }
     }).catch(function (err) {
       prog.textContent = 'failed: ' + err.message;
       prog.classList.add('error');

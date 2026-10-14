@@ -5,6 +5,7 @@
 <form hx-post="/partials/search" hx-target="#results" hx-swap="innerHTML"
       hx-indicator="#searching">
   <input type="search" name="q" required maxlength="2000"
+         aria-label="Search documents"
          placeholder="Ask a question about your documents…" style="width:70%">
   <input type="hidden" name="top_k" value="8">
   <button type="submit">Search</button>

@@ -546,12 +546,12 @@ class CatalogRepository:
     ) -> ReviewQuarantineItem:
         """Record a reviewer's decision: accept | re-route | reject (§5).
 
-        Requires the ``reviewer`` role on the trusted context.
+        Requires the ``reviewer`` or ``admin`` role on the trusted context.
         """
         if decision not in ("accepted", "re-routed", "rejected"):
             raise ValueError(f"invalid quarantine decision: {decision!r}")
-        if not self.context.has_role("reviewer"):
-            raise AuthorizationError("resolving quarantine items requires the reviewer role")
+        if not (self.context.has_role("reviewer") or self.context.has_role("admin")):
+            raise AuthorizationError("resolving quarantine items requires the reviewer or admin role")
         item = self.get_quarantine_item(item_id)
         if item.status != "pending":
             raise ConflictError(f"quarantine item {item_id} is already {item.status}")

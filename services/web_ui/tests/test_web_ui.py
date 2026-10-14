@@ -220,6 +220,12 @@ def test_review_detail_shows_actions_for_reviewer(client: TestClient):
     assert 'action="/review/item-1/resolve"' in body
 
 
+def test_review_detail_shows_actions_for_admin(client: TestClient):
+    login_as(client, "group-a", roles=("user", "admin"))
+    body = _html(client.get("/review/item-1"))
+    assert 'action="/review/item-1/resolve"' in body
+
+
 # ---------------------------------------------------------------------------
 # upload validation + chunked protocol
 # ---------------------------------------------------------------------------
@@ -355,6 +361,7 @@ def test_search_renders_filename_and_page_range(client: TestClient):
     )
     body = _html(resp)
     assert "report-group-a.pdf" in body
+    assert 'href="/documents/doc-group-a-1"' in body
     assert "3" in body and "5" in body  # page_start–page_end
     assert "The quick brown fox." in body
 

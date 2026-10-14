@@ -87,8 +87,18 @@ def test_tool_role_enforcement():
     check_tool_role("resolve_review_item", reviewer)
     check_tool_role("resolve_review_item", admin)  # admin is a superset
 
+    user = make_context(roles=("user",))
+    reader = make_context(roles=("reader",))
+    check_tool_role("search_knowledge_base", user)
+    check_tool_role("search_knowledge_base", reader)
+    check_tool_role("ingest_document", user)
+
+    with pytest.raises(ToolAccessDenied):
+        check_tool_role("ingest_document", reader)
     with pytest.raises(ToolAccessDenied):
         check_tool_role("resolve_review_item", member)
+    with pytest.raises(ToolAccessDenied):
+        check_tool_role("resolve_review_item", user)
     with pytest.raises(ToolAccessDenied):
         check_tool_role("get_review_item", member)
     with pytest.raises(ToolAccessDenied):

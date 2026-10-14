@@ -327,6 +327,18 @@ class TestReviewQueue:
         )
         assert resp.status_code == 409
 
+    def test_resolve_with_admin_role(self, client, settings, session_factory,
+                                     object_store):
+        item_id, _ = _seed_quarantine_item(session_factory, object_store)
+        headers = signed_headers(settings.internal_secret, roles=("admin",))
+        resp = client.post(
+            f"/v1/review/items/{item_id}/resolve",
+            headers=headers,
+            json={"decision": "accepted", "detail": {"chosen": "admin_override"}},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "accepted"
+
     def test_resolve_invalid_decision_rejected(self, client, settings,
                                               session_factory, object_store):
         item_id, _ = _seed_quarantine_item(session_factory, object_store)
