@@ -13,13 +13,18 @@ import yaml
 
 BUILD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-# New_sage's build tree lives next to new_DRUID's (~/workspace/new_sage/build).
-# Override with NEW_SAGE_BUILD_ROOT if the layout differs. The cross-project
-# tests skip when the sage tree is absent (the repos push independently).
-SAGE_BUILD_ROOT = os.environ.get(
-    "NEW_SAGE_BUILD_ROOT",
+# New_sage's build tree lives next to new_DRUID's (~/workspace/new_sage/build
+# or as sibling new_sage in the workspace). Override with NEW_SAGE_BUILD_ROOT.
+# The cross-project tests skip when the sage tree is absent.
+_DEFAULT_SAGE_PATHS = [
+    os.path.abspath(os.path.join(BUILD_ROOT, "..", "new_sage")),
     os.path.abspath(os.path.join(BUILD_ROOT, "..", "..", "new_sage", "build")),
+]
+_FOUND_SAGE = next(
+    (p for p in _DEFAULT_SAGE_PATHS if os.path.exists(os.path.join(p, "deploy", "docker-compose.yml"))),
+    _DEFAULT_SAGE_PATHS[-1],
 )
+SAGE_BUILD_ROOT = os.environ.get("NEW_SAGE_BUILD_ROOT", _FOUND_SAGE)
 
 
 def load_compose():
@@ -127,6 +132,69 @@ def test_no_host_port_collision_across_druid_and_sage():
                 pytest.fail(
                     f"host port {port} published by both {owners[port]} and {key}")
             owners.setdefault(port, key)
+
+
+def effective_bind_mounts(compose, env):
+    """(service, host_path, is_ro) for every host bind mount in the compose."""
+    mounts = []
+    for name, svc in compose.get("services", {}).items():
+        for entry in svc.get("volumes") or []:
+            if isinstance(entry, str):
+                parts = entry.split(":")
+                if len(parts) >= 2:
+                    host_part = parts[0]
+                    resolved_host = _resolve_host_part(host_part, env)
+                    # Bind mounts start with / or ./ or ../ or a drive letter
+                    if not (resolved_host.startswith("/") or resolved_host.startswith(".") or (len(resolved_host) > 1 and resolved_host[1] == ":")):
+                        continue
+                    is_ro = len(parts) >= 3 and "ro" in parts[2].split(",")
+                    mounts.append((name, resolved_host, is_ro))
+            elif isinstance(entry, dict) and entry.get("type") == "bind":
+                source = entry.get("source", "")
+                resolved_host = _resolve_host_part(source, env)
+                is_ro = entry.get("read_only", False)
+                mounts.append((name, resolved_host, is_ro))
+    return mounts
+
+
+def test_no_bind_mount_collision_within_compose_files():
+    """Within one compose project, no two distinct services should mount the same
+    writable host path."""
+    for label, compose, env in compose_files():
+        seen = {}
+        for service, host_path, is_ro in effective_bind_mounts(compose, env):
+            if is_ro:
+                continue
+            norm_path = host_path.replace("\\", "/").rstrip("/")
+            if norm_path in seen:
+                pytest.fail(
+                    f"{label}: writable host path {host_path} mounted by both "
+                    f"{seen[norm_path]} and {service}"
+                )
+            seen[norm_path] = service
+
+
+def test_no_bind_mount_collision_across_druid_and_sage():
+    """Both stacks run on James's H200 box: no two services in DIFFERENT
+    compose projects may mount the same writable host bind mount (prevents
+    database corruption, postmaster.pid locking, raft log split, AOF clobbering)."""
+    files = compose_files()
+    labels = {label for label, _, _ in files}
+    if "sage" not in labels:
+        pytest.skip(f"new_sage tree not found at {SAGE_BUILD_ROOT}")
+    owners = {}
+    for label, compose, env in files:
+        for service, host_path, is_ro in effective_bind_mounts(compose, env):
+            if is_ro:
+                continue  # read-only mounts (e.g. models) can be shared if intentional
+            key = f"{label}/{service}"
+            norm_path = host_path.replace("\\", "/").rstrip("/")
+            if norm_path in owners and owners[norm_path] != key:
+                pytest.fail(
+                    f"writable host bind mount {host_path} mounted by both "
+                    f"{owners[norm_path]} and {key}"
+                )
+            owners[norm_path] = key
 
 
 def test_compose_services_have_dockerfiles():

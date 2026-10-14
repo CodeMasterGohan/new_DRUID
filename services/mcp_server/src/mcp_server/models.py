@@ -212,9 +212,10 @@ class Passage(BaseModel):
             f'parser="{p.parser}" '
             f'trust="{p.trust}"'
         )
+        safe_text = self.text.replace("<<<druid:", "<\\<\\<druid:")
         return (
             f"<<<druid:passage {attrs}>>>\n"
-            f"{self.text}\n"
+            f"{safe_text}\n"
             "<<<druid:end-passage>>>"
         )
 

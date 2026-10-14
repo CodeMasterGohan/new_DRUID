@@ -130,7 +130,10 @@ def strip_spoofable_headers(headers: dict) -> int:
     Returns the number of headers removed. Keys are matched
     case-insensitively.
     """
-    doomed = [k for k in headers if k.lower() in SPOOFABLE_HEADERS]
+    doomed = [
+        k for k in headers
+        if k.lower() in SPOOFABLE_HEADERS or k.lower().startswith("x-druid-")
+    ]
     for key in doomed:
         del headers[key]
     return len(doomed)

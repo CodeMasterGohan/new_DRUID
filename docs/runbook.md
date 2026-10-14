@@ -18,15 +18,16 @@ vLLM run on CPU/host RAM. vLLM (olmOCR-2-7B-FP8) is the ONLY GPU consumer
 
 ### Host bind-mount directories
 
-All persistent data lives in bind mounts under `/DATA/docker/mounts/<service>`
+All persistent data lives in bind mounts under `/DATA/docker/mounts/druid/<service>`
 — no named volumes. Docker creates a missing bind-mount directory as **root**,
 so pre-create them and fix ownership for the images that don't run as root:
 
 ```bash
-sudo mkdir -p /DATA/docker/mounts/{postgres,redis,rustfs,etcd,milvus,models}
-sudo chown 70:70    /DATA/docker/mounts/postgres   # postgres:16-alpine runs as UID 70
-sudo chown 999:999  /DATA/docker/mounts/redis      # redis:7-alpine runs as UID 999
-sudo chown 10001:10001 /DATA/docker/mounts/rustfs   # rustfs runs as UID 10001
+sudo mkdir -p /DATA/docker/mounts/druid/{postgres,redis,rustfs,etcd,milvus}
+sudo mkdir -p /DATA/docker/mounts/models
+sudo chown 70:70    /DATA/docker/mounts/druid/postgres   # postgres:16-alpine runs as UID 70
+sudo chown 999:999  /DATA/docker/mounts/druid/redis      # redis:7-alpine runs as UID 999
+sudo chown 10001:10001 /DATA/docker/mounts/druid/rustfs   # rustfs runs as UID 10001
 # etcd and milvus run as root — no chown needed. models/ is read-only
 # (stage the checkpoints there per the manifests above).
 ```

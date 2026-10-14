@@ -101,6 +101,7 @@ def test_pymilvus_schema_builds():
 @needs_pymilvus
 def test_pymilvus_index_params_build():
     params = S.build_index_params()
-    by_field = {p["field_name"]: p for p in params}
+    raw_params = [p.to_dict() if hasattr(p, "to_dict") else p for p in params]
+    by_field = {p["field_name"]: p for p in raw_params}
     assert by_field["dense_vector"]["metric_type"] == "COSINE"
     assert by_field["sparse_vector"]["metric_type"] == "BM25"

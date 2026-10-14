@@ -41,7 +41,8 @@ def wrap_passage(result: SearchResult) -> str:
         f"modality: {result.modality} — "
         f"chunk: {result.chunk_id}]"
     )
-    return f"{header}\n{result.text}\n{_END}"
+    safe_text = result.text.replace(_END, "\\[END RETRIEVED PASSAGE\\]")
+    return f"{header}\n{safe_text}\n{_END}"
 
 
 def assemble_citation(result: SearchResult) -> dict:

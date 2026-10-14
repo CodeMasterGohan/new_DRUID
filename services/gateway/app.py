@@ -133,7 +133,10 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     async def _strip_spoofable_headers(request: Request, call_next):
         raw = [(k, v) for k, v in request.scope["headers"]]
         cleaned = [
-            (k, v) for (k, v) in raw if k.decode("latin-1").lower() not in SPOOFABLE_HEADERS
+            (k, v)
+            for (k, v) in raw
+            if k.decode("latin-1").lower() not in SPOOFABLE_HEADERS
+            and not k.decode("latin-1").lower().startswith("x-druid-")
         ]
         request.scope["headers"] = cleaned
         return await call_next(request)

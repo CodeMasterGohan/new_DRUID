@@ -15,7 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.parse import urlparse
 
 import yaml
@@ -105,7 +105,15 @@ def load_manifest(path: str | Path) -> ArtifactManifest:
             raise ManifestError(
                 f"{path}: files[{i}].sha256 must be a 64-char hex digest"
             )
-        if Path(file_path).is_absolute() or ".." in Path(file_path).parts:
+        p_posix = PurePosixPath(file_path)
+        p_win = PureWindowsPath(file_path)
+        if (
+            p_posix.is_absolute()
+            or p_win.is_absolute()
+            or file_path.startswith(("/", "\\"))
+            or ".." in p_posix.parts
+            or ".." in p_win.parts
+        ):
             raise ManifestError(
                 f"{path}: files[{i}].path must be a relative path without '..'"
             )

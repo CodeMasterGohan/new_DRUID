@@ -147,6 +147,26 @@ def test_spoofed_identity_headers_are_stripped_and_ignored(client):
         assert spoofed not in received, f"{spoofed} leaked upstream"
 
 
+def test_arbitrary_x_druid_headers_are_stripped(client):
+    """Any inbound header prefixed with X-Druid-* must be stripped by middleware."""
+    token = make_token()
+    resp = client.get(
+        "/v1/documents/abc",
+        headers=auth_headers(
+            token,
+            **{
+                "X-Druid-Custom-Privilege": "injected",
+                "X-Druid-Admin-Override": "true",
+            },
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    received = {k.lower(): v for k, v in body["received_headers"].items()}
+    assert "x-druid-custom-privilege" not in received
+    assert "x-druid-admin-override" not in received
+
+
 def test_caller_supplied_tenant_id_in_tool_args_is_ignored(client):
     """MCP tool arguments must never influence tenant identity (§4)."""
     token = make_token(group_id="tenant-a")
