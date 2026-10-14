@@ -62,11 +62,21 @@ th { background: var(--th-bg); }
 .muted { color: var(--muted); }
 .error { color: var(--danger); }
 .warn { background: var(--warn-bg); border: 1px solid var(--warn-border); padding: 0.6rem; }
-.badge { background: var(--badge-bg); color: var(--badge-fg); border-radius: 4px; padding: 0 0.4em; font-size: 0.8em; }
+.notice {
+  background: var(--header-bg);
+  border: 1px solid var(--accent);
+  border-left: 4px solid var(--accent);
+  padding: 0.6rem 0.9rem;
+  margin: 0.5rem 0 1rem 0;
+  border-radius: 4px;
+}
 .state { font-weight: 600; white-space: nowrap; }
 .state-ready { color: var(--ok); }
 .state-failed { color: var(--danger); }
 .state-review-required { color: var(--review); }
+.state-queued, .state-running, .state-ingesting { color: var(--accent); }
+.state-retry-pending { color: var(--review); }
+.state-deleting, .state-deleted { color: var(--muted); }
 button, .button {
   background: var(--accent); color: #fff; border: 0; border-radius: 4px;
   padding: 0.45rem 0.9rem; cursor: pointer; text-decoration: none;

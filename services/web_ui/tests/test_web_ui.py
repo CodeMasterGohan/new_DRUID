@@ -152,9 +152,11 @@ def test_review_resolve_forwards_callers_token(client: TestClient, mock_gateway)
         follow_redirects=False,
     )
     assert resp.status_code == 303
+    assert resp.headers["location"] == "/review?notice=resolved"
     assert mock_gateway.last_auth_header() == f"Bearer {token}"
     assert mock_gateway.resolved[-1]["group"] == "group-a"
     assert mock_gateway.resolved[-1]["body"]["decision"] == "accepted"
+    assert mock_gateway.resolved[-1]["body"]["detail"] == {"note": "looks fine"}
 
 
 # ---------------------------------------------------------------------------
@@ -396,3 +398,24 @@ def test_document_detail_shows_versions(client: TestClient):
 def test_quarantine_page_renders(client: TestClient):
     login_as(client, "group-a")
     assert _html(client.get("/quarantine"))  # 200, no FAILED docs in mock
+
+
+def test_document_delete_redirects_with_notice(client: TestClient):
+    login_as(client, "group-a")
+    resp = client.post("/documents/doc-group-a-1/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/documents?notice=deleted"
+
+
+def test_active_nav_tab_highlighted(client: TestClient):
+    login_as(client, "group-a")
+    body = _html(client.get("/documents"))
+    assert '<a href="/documents" class="active">Documents</a>' in body
+    assert '<a href="/upload" class="">Upload</a>' in body
+
+
+def test_notice_banner_renders(client: TestClient):
+    login_as(client, "group-a")
+    body = _html(client.get("/documents?notice=deleted"))
+    assert 'class="notice"' in body
+    assert "Deletion queued" in body

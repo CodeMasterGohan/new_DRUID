@@ -114,21 +114,22 @@ def context_from_claims(claims: TokenClaims) -> RequestContext:
 
 
 # Tool name -> roles permitted to invoke it. "admin" is a superset role that
-# is accepted everywhere a narrower role is. "user", "member", and "reader" are
-# accepted for read tools; "user" and "member" are accepted for mutations.
-_READ_ROLES = frozenset({"member", "user", "reader", "reviewer", "admin"})
-_MUTATION_ROLES = frozenset({"member", "user", "reviewer", "admin"})
+# is accepted everywhere a narrower role is. "user" is the documented default
+# role (Web UI sessions carry it) and has the same tool access as "member" —
+# without it, Web UI search (routed through search_knowledge_base) fails for
+# ordinary users.
+_MEMBER_ROLES = frozenset({"user", "member", "reviewer", "admin"})
 _REVIEW_ROLES = frozenset({"reviewer", "admin"})
 
 TOOL_ROLES: dict[str, frozenset[str]] = {
-    "search_knowledge_base": _READ_ROLES,
-    "ingest_document": _MUTATION_ROLES,
-    "get_ingestion_status": _READ_ROLES,
-    "list_documents": _READ_ROLES,
-    "get_document": _READ_ROLES,
+    "search_knowledge_base": _MEMBER_ROLES,
+    "ingest_document": _MEMBER_ROLES,
+    "get_ingestion_status": _MEMBER_ROLES,
+    "list_documents": _MEMBER_ROLES,
+    "get_document": _MEMBER_ROLES,
     "get_review_item": _REVIEW_ROLES,
     "resolve_review_item": _REVIEW_ROLES,
-    "delete_document": _MUTATION_ROLES,
+    "delete_document": _MEMBER_ROLES,
 }
 
 

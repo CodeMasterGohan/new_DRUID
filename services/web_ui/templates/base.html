@@ -6,22 +6,23 @@
 <title>{% block title %}DRUID{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/htmx.min.js"></script>
+{% block head %}{% endblock %}
 </head>
 <body>
 <header>
   <nav aria-label="Main navigation">
     <span class="brand">DRUID</span>
     {% if identity is defined and identity %}
-      <a href="/upload">Upload</a>
-      <a href="/documents">Documents</a>
-      <a href="/review">Review queue</a>
-      <a href="/quarantine">Quarantine</a>
-      <a href="/search">Search</a>
+      <a href="/upload" class="{% if nav_active == 'upload' %}active{% endif %}">Upload</a>
+      <a href="/documents" class="{% if nav_active == 'documents' %}active{% endif %}">Documents</a>
+      <a href="/review" class="{% if nav_active == 'review' %}active{% endif %}">Review queue</a>
+      <a href="/quarantine" class="{% if nav_active == 'quarantine' %}active{% endif %}">Quarantine</a>
+      <a href="/search" class="{% if nav_active == 'search' %}active{% endif %}">Search</a>
       {% if is_admin %}
         <span class="nav-admin">Admin:
-          <a href="/admin/documents">Documents</a>
-          <a href="/admin/jobs">Jobs</a>
-          <a href="/admin/quotas">Quotas</a>
+          <a href="/admin/documents" class="{% if nav_active == 'admin-documents' %}active{% endif %}">Documents</a>
+          <a href="/admin/jobs" class="{% if nav_active == 'admin-jobs' %}active{% endif %}">Jobs</a>
+          <a href="/admin/quotas" class="{% if nav_active == 'admin-quotas' %}active{% endif %}">Quotas</a>
         </span>
       {% endif %}
       <span class="nav-right">
@@ -34,6 +35,9 @@
   </nav>
 </header>
 <main>
+{% if notice %}
+<div class="notice" role="status">{{ notice }}</div>
+{% endif %}
 {% block content %}{% endblock %}
 </main>
 </body>

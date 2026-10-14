@@ -43,12 +43,41 @@ def login_redirect(request: Request) -> RedirectResponse:
     return RedirectResponse(url=target, status_code=303)
 
 
+#: Post-action confirmations, keyed by the ``?notice=`` query param. Only
+#: these fixed strings are ever rendered — the param value itself is not.
+NOTICES = {
+    "deleted": "Deletion queued. The document disappears once every store confirms.",
+    "resolved": "Review item resolved.",
+}
+
+#: Top-level nav sections, matched by path prefix (longest first).
+_NAV_SECTIONS = (
+    ("/admin/documents", "admin-documents"),
+    ("/admin/jobs", "admin-jobs"),
+    ("/admin/quotas", "admin-quotas"),
+    ("/upload", "upload"),
+    ("/documents", "documents"),
+    ("/review", "review"),
+    ("/quarantine", "quarantine"),
+    ("/search", "search"),
+)
+
+
+def _nav_section(path: str) -> str | None:
+    for prefix, name in _NAV_SECTIONS:
+        if path == prefix or path.startswith(prefix + "/"):
+            return name
+    return None
+
+
 def page_context(request: Request, identity: Identity, **extra):
     return {
         "request": request,
         "identity": identity,
         "is_admin": identity.is_admin,
         "can_review": identity.can_review,
+        "nav_active": _nav_section(request.url.path),
+        "notice": NOTICES.get(request.query_params.get("notice", "")),
         **extra,
     }
 
@@ -58,6 +87,8 @@ async def enrich_documents(client, documents: list[dict]) -> list[dict]:
 
     The list endpoint returns summaries only; version state lives on the
     detail endpoint. N+1 is fine for a human-scale table (≤100 rows).
+    ``latest_status`` is the newest version's status (the detail endpoint
+    orders versions newest first), used to surface failed re-ingests.
     """
     from api_client import ApiError
 
@@ -67,6 +98,7 @@ async def enrich_documents(client, documents: list[dict]) -> list[dict]:
         row["status"] = "—"
         row["page_count"] = "—"
         row["version_number"] = "—"
+        row["latest_status"] = None
         try:
             detail = await client.get_document(d["document_id"])
         except ApiError:
@@ -79,6 +111,8 @@ async def enrich_documents(client, documents: list[dict]) -> list[dict]:
             row["status"] = target.get("status", "—")
             row["page_count"] = target.get("page_count", "—")
             row["version_number"] = target.get("version_number", "—")
+        if versions:
+            row["latest_status"] = versions[0].get("status")
         enriched.append(row)
     return enriched
 

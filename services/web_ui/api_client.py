@@ -127,11 +127,14 @@ class DruidApiClient:
         return await self._request("GET", f"/v1/review/items/{item_id}")
 
     async def resolve_review_item(
-        self, item_id: str, decision: str, detail: str | None = None
+        self, item_id: str, decision: str, note: str | None = None
     ) -> dict:
-        body: dict[str, Any] = {"decision": decision}
-        if detail:
-            body["detail"] = detail
+        # document_api's ResolveReviewRequest.detail is a JSON object; a bare
+        # string is rejected with 422. Same shape the MCP server sends.
+        body: dict[str, Any] = {
+            "decision": decision,
+            "detail": {"note": note} if note else {},
+        }
         return await self._request(
             "POST", f"/v1/review/items/{item_id}/resolve", json=body
         )
