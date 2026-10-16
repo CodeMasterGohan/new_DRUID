@@ -20,6 +20,7 @@ def test_embed_client_strips_existing_prompt_exactly_once(monkeypatch):
             return self.client
         def __exit__(self, *args):
             self.client.close()
+    # Save the unpatched constructor: our fake must not recurse.
     monkeypatch.setattr("services.retrieval.production.httpx.Client", Client)
     adapter = HttpEmbeddingClient("http://embedding:8003")
     vec = adapter.embed_query("task: code retrieval | query: find useEffect()")
