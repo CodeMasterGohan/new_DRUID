@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from .config import ChunkerSettings
 from .identifiers import IdentifierExtractor
@@ -67,6 +68,12 @@ class Chunk:
         }
 
 
+@lru_cache(maxsize=4)
+def _cached_tokenizer(path: str):
+    from transformers import AutoTokenizer
+    return AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
+
+
 def _default_token_len(text: str) -> int:
     """MiniLM reranker tokenizer, pre-staged artifact only.
 
@@ -89,7 +96,7 @@ def _default_token_len(text: str) -> int:
             "MINILM_TOKENIZER_PATH is not set: the reranker tokenizer must "
             "be pre-staged per the artifact policy (§3). Refusing to download."
         )
-    tok = AutoTokenizer.from_pretrained(path, local_files_only=True, trust_remote_code=False)
+    tok = _cached_tokenizer(path)
     return len(tok.encode(text, add_special_tokens=False))
 
 
