@@ -53,8 +53,8 @@ Run the regression suite (does not require GPU/model weights):
 python -m compileall -q services tests
 python -m pytest -q services/retrieval/tests tests/test_p0_wiring.py tests/test_deploy_wiring.py
 cp .env.example .env   # use placeholder values ONLY for Compose validation
-docker compose -f deploy/docker-compose.yml config --quiet
-docker compose -f deploy/docker-compose.gpu.yml config --quiet
+docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml config --quiet
 ```
 
 CI runs the same lightweight suite using mocks, not a live database. The
@@ -108,8 +108,8 @@ Use a test tenant and avoid production-sensitive documents.
 Copy the curated file into the retrieval container (with the stack up):
 
 ```bash
-docker cp curated.jsonl "$(docker compose -f deploy/docker-compose.yml ps -q retrieval)":/tmp/druid-eval.jsonl
-docker compose -f deploy/docker-compose.yml exec \
+docker cp curated.jsonl "$(docker compose --env-file .env -f deploy/docker-compose.yml ps -q retrieval)":/tmp/druid-eval.jsonl
+docker compose --env-file .env -f deploy/docker-compose.yml exec \
   -e DRUID_EVAL_USER=<trusted-user-id> \
   -e DRUID_EVAL_GROUP=<test-tenant-group-id> \
   retrieval python -m services.retrieval.eval_live \
