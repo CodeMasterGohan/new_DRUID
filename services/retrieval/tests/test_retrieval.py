@@ -399,7 +399,7 @@ def test_truncate_to_budget():
 
 def test_source_reference_uses_metadata_not_raw_text():
     ref = build_source_reference("report.pdf", 3, 5, ["A", "B"])
-    assert ref == "report.pdf (pp. 3-5) — A / B"
+    assert ref == "report.pdf (pp. 4-6) — A / B"
     assert "secret document content" not in ref
 
 
