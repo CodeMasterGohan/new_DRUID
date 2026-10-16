@@ -51,7 +51,7 @@ class JWTVerifier(TokenVerifier):
         audience: str,
         leeway_seconds: int = 30,
         subject_claim: str = "sub",
-        tenant_claim: str = "grp",
+        tenant_claim: str = "group_id",
         roles_claim: str = "roles",
     ) -> None:
         if not issuer or not audience:
@@ -83,6 +83,8 @@ class JWTVerifier(TokenVerifier):
 
         subject = payload.get(self._subject_claim)
         group_id = payload.get(self._tenant_claim)
+        if "grp" in payload and payload["grp"] != group_id:
+            raise AuthError("conflicting tenant claims")
         roles = payload.get(self._roles_claim, [])
         if not subject or not isinstance(subject, str):
             raise AuthError("token missing subject claim")
