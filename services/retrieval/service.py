@@ -61,6 +61,7 @@ class RetrievalService:
         *,
         task_hint: str | None = None,
         expand_neighbors: bool | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> list[SearchResult]:
         """Execute the §10 search sequence. Fails closed on bad context."""
         cfg = self._config
@@ -79,8 +80,12 @@ class RetrievalService:
         allowed = self._catalog.allowed_versions(ctx)
         if not allowed:
             log.info("no searchable versions for tenant", extra={"tenant": ctx.group_id})
+            if diagnostics is not None:
+                diagnostics.update({"authorized_versions": 0, "result_count": 0,
+                                    "branches": {"dense": 0, "bm25": 0, "identifier": 0}})
             return []
         predicate = AuthPredicate(group_id=ctx.group_id, allowed_versions=allowed)
+        catalog_done = time.monotonic()
 
         # 4. Query embedding with the task-appropriate prompt (§8).
         task = detect_task(query, task_hint)
@@ -99,6 +104,7 @@ class RetrievalService:
                 f"{cfg.embedding_dimension}; refusing to mix contracts (§8)"
             )
 
+        embed_done = time.monotonic()
         # 5-7. Authorized dense / BM25 / identifier retrieval — SAME predicate.
         try:
             dense_hits = self._store.dense_search(
@@ -118,6 +124,7 @@ class RetrievalService:
         except Exception as exc:
             raise DependencyError(f"vector store query failed: {exc}") from exc
 
+        candidates_done = time.monotonic()
         # 8. Deduplicate + RRF fusion; identifier hits merged with fixed boost.
         fused = reciprocal_rank_fusion(
             {"dense": dense_hits, "bm25": bm25_hits}, k=cfg.rrf_k
@@ -155,6 +162,7 @@ class RetrievalService:
             else min(len(image_records), cfg.final_results)
         )
         text_slots = cfg.final_results - image_slots
+        rerank_done = time.monotonic()
         ordered: list[tuple[FusedCandidate, float | None]] = [
             (cand, score) for cand, score in reranked[:text_slots]
         ] + [(cand, None) for cand in image_records[:image_slots]]
@@ -198,6 +206,31 @@ class RetrievalService:
             ctx.group_id,
             ctx.request_id,
         )
+        if diagnostics is not None:
+            # Authorized callers only; never emit raw documents or query text.
+            final_done = time.monotonic()
+            diagnostics.update({
+                "authorized_versions": len(allowed),
+                "branches": {
+                    "dense": len(dense_hits),
+                    "bm25": len(bm25_hits),
+                    "identifier": len(identifier_hits),
+                },
+                "fused_count": len(fused),
+                "reranked_text_count": len(reranked),
+                "page_image_candidates": len(image_records),
+                "dropped_after_catalog_recheck": before_reconcile - len(results),
+                "result_count": len(results),
+                "timings_ms": {
+                    "catalog": round((catalog_done - started) * 1000, 2),
+                    "embedding": round((embed_done - catalog_done) * 1000, 2),
+                    "candidate_search": round((candidates_done - embed_done) * 1000, 2),
+                    "fusion_rerank": round((rerank_done - candidates_done) * 1000, 2),
+                    "reconciliation": round((final_done - rerank_done) * 1000, 2),
+                    "total": round((final_done - started) * 1000, 2),
+                },
+                "ranked_chunk_ids": [r.chunk_id for r in results[:20]],
+            })
         # 12. Provenance-tagged results per the §10 contract.
         return results
 
