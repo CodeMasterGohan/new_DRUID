@@ -21,7 +21,6 @@ services:
 
     networks:
     - default
-    - cora
   redis:
     image: redis:7.4.2-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -36,7 +35,6 @@ services:
 
     networks:
     - default
-    - cora
   rustfs:
     # Replaces MinIO (community edition archived 2026). RustFS runs as
     # non-root UID 10001; the named volume is owned on first start.
@@ -57,7 +55,6 @@ services:
 
     networks:
     - default
-    - cora
   etcd:
     image: quay.io/coreos/etcd:v3.5.16
     environment:
@@ -72,7 +69,6 @@ services:
 
     networks:
     - default
-    - cora
   milvus:
     image: milvusdb/milvus:v2.5.6
     command: ["milvus", "run", "standalone"]
@@ -93,7 +89,6 @@ services:
   # ── one-shot jobs ──────────────────────────────────────────────
     networks:
     - default
-    - cora
   catalog:
     build:
       context: ..
@@ -106,7 +101,6 @@ services:
 
     networks:
     - default
-    - cora
   milvus_setup:
     build:
       context: ..
@@ -122,7 +116,6 @@ services:
   # ── long-running CPU services ──────────────────────────────────
     networks:
     - default
-    - cora
   gateway:
     build:
       context: ..
@@ -136,7 +129,6 @@ services:
 
     networks:
     - default
-    - cora
   document_api:
     build:
       context: ..
@@ -152,7 +144,6 @@ services:
 
     networks:
     - default
-    - cora
   mcp_server:
     build:
       context: ..
@@ -160,7 +151,7 @@ services:
     env_file:
     - ../.env
     ports:
-    - "${MCP_PORT:-8002}:8002"
+    - "${MCP_BIND_IP:-127.0.0.1}:${MCP_PORT:-8002}:8002"
     depends_on:
     - document_api
     - retrieval
@@ -195,6 +186,9 @@ services:
       dockerfile: services/embedding/Dockerfile
     env_file:
     - ../.env
+    environment:
+      EMBEDDING_MODEL_PATH: /models/google/embeddinggemma-2
+      EMBEDDING_MODEL_DIR: /models/google/embeddinggemma-2
     volumes:
       # Host artifact registry, READ-ONLY. Missing models fail startup.
     - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
@@ -202,13 +196,16 @@ services:
 
     networks:
     - default
-    - cora
   retrieval:
     build:
       context: ..
       dockerfile: services/retrieval/Dockerfile
     env_file:
     - ../.env
+    environment:
+      MINILM_MODEL_PATH: /models/cross-encoder/ms-marco-MiniLM-L6-v2
+      MINILM_TOKENIZER_PATH: /models/cross-encoder/ms-marco-MiniLM-L6-v2
+      EMBEDDING_URL: http://embedding:8003
     volumes:
     - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
     depends_on:
@@ -218,13 +215,15 @@ services:
 
     networks:
     - default
-    - cora
   ingestion:
     build:
       context: ..
       dockerfile: services/ingestion/Dockerfile
     env_file:
     - ../.env
+    environment:
+      EMBEDDING_MODEL_PATH: /models/google/embeddinggemma-2
+      MINILM_TOKENIZER_PATH: /models/cross-encoder/ms-marco-MiniLM-L6-v2
     volumes:
     - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
     depends_on:
@@ -236,8 +235,8 @@ services:
       # Shared with the gpu project so workers can reach vLLM by its
       # compose service name (vllm-olmocr). Create once:
       #   docker network create druid-net
+    - default
     - druid-net
-    - cora
     restart: unless-stopped
     # Scale CPU workers: docker compose up -d --scale ingestion=4
 
