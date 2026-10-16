@@ -86,19 +86,19 @@ docker network create druid-net
 docker network create cora  # only if absent; web UI and MCP still use it
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
+docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
 
 # 2. Schema + migrations (one-shot jobs, must exit 0)
-docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
-docker compose -f deploy/docker-compose.yml run --rm milvus_setup   # collections + indexes
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm milvus_setup   # collections + indexes
 
 # 3. CPU services
-docker compose -f deploy/docker-compose.yml up -d gateway document_api mcp_server embedding retrieval
-docker compose -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
+docker compose --env-file .env -f deploy/docker-compose.yml up -d gateway document_api mcp_server embedding retrieval
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
 
 # 4. GPU plane (H200 host only)
-docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
-docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
 ```
 
 ## 3. Smoke tests
@@ -106,7 +106,7 @@ docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://
 ```bash
 # Gateway rejects unauthenticated requests (gateway port is internal-only;
 # reach it via the compose network)
-docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 200 (unauthenticated health endpoint)
+docker compose --env-file .env -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 200 (unauthenticated health endpoint)
 
 # Milvus collection exists with the alias
 # (via milvus_setup logs or pymilvus: utility.has_collection("project_knowledge_base_v1"))
@@ -115,7 +115,7 @@ docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w
 docker compose logs embedding | grep -i "offline\|model loaded"
 
 # vLLM serves the FP8 checkpoint
-docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/v1/models   # internal-only vLLM endpoint
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/v1/models   # internal-only vLLM endpoint
 ```
 
 ## 4. Offline verification (§3 step 7)
