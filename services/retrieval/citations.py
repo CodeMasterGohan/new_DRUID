@@ -22,10 +22,14 @@ def build_source_reference(
     Takes metadata fields — never raw document text — so there is no path
     for document content to leak into system-adjacent fields.
     """
+    # The canonical document tree stores zero-based page indices.
+    # Citations are for humans and must be one-based.
+    if page_start < 0 or page_end < page_start:
+        raise ValueError("invalid zero-based document page range")
     if page_start == page_end:
-        pages = f"p. {page_start}"
+        pages = f"p. {page_start + 1}"
     else:
-        pages = f"pp. {page_start}-{page_end}"
+        pages = f"pp. {page_start + 1}-{page_end + 1}"
     ref = f"{filename} ({pages})"
     if heading_path:
         ref += " — " + " / ".join(heading_path)
@@ -52,8 +56,9 @@ def assemble_citation(result: SearchResult) -> dict:
         "document_version": result.document_version,
         "chunk_id": result.chunk_id,
         "source_reference": result.source_reference,
-        "page_start": result.page_start,
-        "page_end": result.page_end,
+        # Public citation metadata follows the same one-based convention.
+        "page_start": result.page_start + 1,
+        "page_end": result.page_end + 1,
         "rank": result.rank,
         "provenance": result.provenance,
         "modality": result.modality,
