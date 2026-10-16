@@ -45,6 +45,26 @@ Do not treat mock-backed CI as production acceptance.
    latency p50/p95, request failures and explicitly labeled forbidden-document
    leaks. It does **not** measure LLM hallucinations or answer faithfulness.
 
+## Additional release blockers fixed
+
+- MCP JWT tenant identity now uses `group_id`, consistent with the gateway
+  and Web UI. Legacy-only `grp` tokens are rejected. When both claims
+  exist, they must agree. Validate real issuer/audience separation with
+  signed integration tokens before production deployment.
+- Internal PDF page indexes are zero-based. The human citation formatter
+  and citation metadata convert to one-based numbering; existing stored
+  page indexes are not modified.
+- Login `next` destinations are restricted to local absolute paths,
+  including percent-decoded forms.
+- Web UI now binds to `127.0.0.1:8005` by default. External browser
+  access requires an operator-installed HTTPS reverse proxy and valid
+  certificates. An example host-level Nginx configuration is in
+  `deploy/nginx-web-ui-https.conf.example`. Do not enable the example
+  without replacing domain/certificate settings and testing Secure cookies.
+- No automatic legacy-vector migration is attempted: index version UUIDs
+  must be reingested with catalog `version_number` into a staged collection.
+  Rollback requires a preserved snapshot and alias.
+
 ## CI and local testing
 
 Run the regression suite (does not require GPU/model weights):
