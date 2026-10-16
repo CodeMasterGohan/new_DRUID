@@ -150,19 +150,35 @@ async def search(
             x_druid_request_id or "-",
         )
         raise HTTPException(status_code=400, detail="invalid JSON body")
-    query = (body.get("query") or "").strip()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="expected JSON object")
+    query = body.get("query")
+    if not isinstance(query, str):
+        raise HTTPException(status_code=400, detail="query must be a string")
+    query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
+    wants_diagnostics = body.get("diagnostics", False) is True
+    if wants_diagnostics and (
+        os.environ.get("DRUID_RETRIEVAL_DIAGNOSTICS") != "1"
+        or "admin" not in context.roles
+    ):
+        raise HTTPException(status_code=403, detail="retrieval diagnostics not permitted")
+    trace = {} if wants_diagnostics else None
     results = get_service().search(
         context,
         query,
         task_hint=body.get("task_hint"),
         expand_neighbors=body.get("expand_neighbors"),
+        diagnostics=trace,
     )
-    return {
+    payload = {
         "results": [r.to_dict() for r in results],
         "passages": [wrap_passage(r) for r in results],
     }
+    if trace is not None:
+        payload["diagnostics"] = trace
+    return payload
 
 
 @app.exception_handler(Exception)
