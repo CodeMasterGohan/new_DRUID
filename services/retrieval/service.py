@@ -143,10 +143,20 @@ class RetrievalService:
                 ctx.request_id,
             )
 
+        # Reserve a bounded slot for a relevant page image when both
+        # modalities are available. The previous text-first truncation made
+        # page images unreachable whenever >= final_results text hits existed.
+        image_slots = (
+            min(len(image_records), cfg.max_page_image_results,
+                max(1, cfg.final_results // 4))
+            if reranked and image_records and cfg.final_results > 1
+            else min(len(image_records), cfg.final_results)
+        )
+        text_slots = cfg.final_results - image_slots
         ordered: list[tuple[FusedCandidate, float | None]] = [
-            (cand, score) for cand, score in reranked
-        ] + [(cand, None) for cand in image_records]
-        finalists = ordered[: cfg.final_results]
+            (cand, score) for cand, score in reranked[:text_slots]
+        ] + [(cand, None) for cand in image_records[:image_slots]]
+        finalists = ordered
 
         results = [
             self._to_result(ctx, cand, reranker_score, rank)
