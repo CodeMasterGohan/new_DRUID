@@ -172,7 +172,7 @@ services:
       # the UI on the host-mapped port.
       GATEWAY_URL: "http://gateway:8000"
     ports:
-    - "${WEB_UI_PORT:-8005}:8005"
+    - "${WEB_UI_BIND_IP:-127.0.0.1}:${WEB_UI_PORT:-8005}:8005"
     depends_on:
     - gateway
     restart: unless-stopped
