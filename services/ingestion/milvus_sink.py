@@ -28,7 +28,7 @@ class MilvusIndexSink(IndexSink):
         if not records:
             return 0
         result = self._client.upsert(collection_name=self._collection, data=records)
-        count = int(result.get("upsert_count", -1))
+        count = int(result.get("upsert_count", result.get("insert_count", -1)))
         if count != len(records):
             raise RuntimeError(
                 f"Milvus upsert count mismatch: {count} != {len(records)}"
