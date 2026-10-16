@@ -13,6 +13,7 @@ def test_embed_client_strips_existing_prompt_exactly_once(monkeypatch):
             "vectors": [[0.5] * 768], "dimension": 768
         })
     ))
+    original_client = httpx.Client
     class Client:
         def __init__(self, timeout):
             self.client = httpx.Client(transport=transport)
