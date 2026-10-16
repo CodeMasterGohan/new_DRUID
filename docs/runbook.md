@@ -83,6 +83,7 @@ cp .env.example .env   # fill secrets
 # 0. Shared network for cross-project DNS (ingestion workers → vLLM).
 #    Both compose projects attach to it as external. Create once per host.
 docker network create druid-net
+docker network create cora  # only if absent; web UI and MCP still use it
 
 # 1. Infrastructure
 docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
@@ -105,7 +106,7 @@ docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://
 ```bash
 # Gateway rejects unauthenticated requests (gateway port is internal-only;
 # reach it via the compose network)
-docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 401/403 without token
+docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 200 (unauthenticated health endpoint)
 
 # Milvus collection exists with the alias
 # (via milvus_setup logs or pymilvus: utility.has_collection("project_knowledge_base_v1"))
@@ -114,7 +115,7 @@ docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w
 docker compose logs embedding | grep -i "offline\|model loaded"
 
 # vLLM serves the FP8 checkpoint
-curl http://localhost:8000/v1/models   # expect served-model-name olmocr-2-fp8
+docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/v1/models   # internal-only vLLM endpoint
 ```
 
 ## 4. Offline verification (§3 step 7)
