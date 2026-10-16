@@ -44,15 +44,18 @@ browser / AI agent / CLI
         pdftext ──► page router ──► olmOCR 2 FP8 on vLLM (ONLY GPU consumer)
 ```
 
-All containers also join the pre-existing external **`cora`** Docker network.
-Only three host ports are published: **8005** (web UI), **8002** (MCP),
-everything else is container-to-container.
+Backend containers remain on private Compose networks rather than joining
+the external **`cora`** network. Web UI and MCP retain opt-in cross-project
+reachability; ingestion also joins **`druid-net`** for GPU OCR.
+Only two host ports are published: **8005** (web UI) and **8002** (MCP,
+loopback-bound by default). Everything else is container-to-container.
 
 ## Quickstart
 
 ```bash
 cp .env.example .env          # fill in secrets (never commit .env)
 docker network create cora    # only if not already present on your host
+docker network create druid-net # shared with the GPU OCR project
 
 # 1. Infrastructure
 docker compose -f deploy/docker-compose.yml up -d
@@ -71,9 +74,9 @@ couldn't resolve on its own; an admin sees cross-tenant documents, jobs, and
 quotas.
 
 > **First boot needs three things:** model weights staged per
-> `services/artifacts/manifests/` (`MODEL_DIR`, read-only), the `cora`
-> network present, and live Postgres/Redis/RustFS/Milvus. See
-> `docs/runbook.md`.
+> `services/artifacts/manifests/` (`MODEL_DIR`, read-only), both
+> `cora` and `druid-net` networks, and live Postgres/Redis/RustFS/Milvus.
+> See `docs/runbook.md` and `DRUID_HARDENING.md` before any rollout.
 
 ## MCP tools
 
