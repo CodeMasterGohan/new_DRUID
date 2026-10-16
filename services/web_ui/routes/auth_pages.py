@@ -26,10 +26,22 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _safe_next(target: str) -> str:
+    """Accept only local absolute paths; reject protocol-relative redirects."""
+    if (not isinstance(target, str) or not target.startswith("/")
+            or target.startswith("//") or "\\\\" in target
+            or any(ord(char) < 32 or ord(char) == 127 for char in target)):
+        return "/documents"
+    from urllib.parse import urlsplit
+    parsed = urlsplit(target)
+    if parsed.scheme or parsed.netloc or parsed.path.startswith("//"):
+        return "/documents"
+    return target
+
+
 @router.get("/login")
 def login_form(request: Request, next: str = "/documents"):
-    if next != "/" and not next.startswith("/"):
-        next = "/documents"  # open-redirect guard
+    next = _safe_next(next)
     try:
         current_identity(request)
         return RedirectResponse(url=next, status_code=303)
@@ -47,8 +59,7 @@ def login_submit(
     next: str = Form(default="/documents"),
 ):
     """Validate the pasted token and establish the session cookie."""
-    if next != "/" and not next.startswith("/"):
-        next = "/documents"
+    next = _safe_next(next)
     token = (token or "").strip()
     try:
         validate_token(token, request.app.state.jwt_settings)
