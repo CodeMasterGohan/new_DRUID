@@ -23,7 +23,7 @@ jobs:
         run: python -m compileall -q services tests
       - name: Execute retrieval and deployment contracts (mocked backends)
         run: |
-          python -m pytest -q services/retrieval/tests tests/test_p0_wiring.py
+          python -m pytest -q services/retrieval/tests tests/test_p0_wiring.py tests/test_deploy_wiring.py
       - name: Validate Docker Compose configuration
         run: |
           cp .env.example .env
