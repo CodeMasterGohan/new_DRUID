@@ -27,16 +27,25 @@ router = APIRouter()
 
 
 def _safe_next(target: str) -> str:
-    """Accept only local absolute paths; reject protocol-relative redirects."""
-    if (not isinstance(target, str) or not target.startswith("/")
-            or target.startswith("//") or "\\\\" in target
-            or any(ord(char) < 32 or ord(char) == 127 for char in target)):
+    """Allow only same-origin absolute paths, including after URL decoding."""
+    from urllib.parse import unquote, urlsplit
+
+    if not isinstance(target, str):
         return "/documents"
-    from urllib.parse import urlsplit
-    parsed = urlsplit(target)
-    if parsed.scheme or parsed.netloc or parsed.path.startswith("//"):
-        return "/documents"
-    return target
+    candidate = target
+    for _ in range(3):
+        if (not candidate.startswith("/") or candidate.startswith("//")
+                or chr(92) in candidate
+                or any(ord(char) < 32 or ord(char) == 127 for char in candidate)):
+            return "/documents"
+        parsed = urlsplit(candidate)
+        if parsed.scheme or parsed.netloc or parsed.path.startswith("//"):
+            return "/documents"
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return target
+        candidate = decoded
+    return "/documents"
 
 
 @router.get("/login")
