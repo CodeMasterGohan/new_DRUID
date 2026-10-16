@@ -58,14 +58,14 @@ docker network create cora    # only if not already present on your host
 docker network create druid-net # shared with the GPU OCR project
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 # 2. Schema + search collections (one-shot, must exit 0)
-docker compose -f deploy/docker-compose.yml run --rm catalog
-docker compose -f deploy/docker-compose.yml run --rm milvus_setup
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm catalog
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm milvus_setup
 # 3. CPU services
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 # 4. GPU plane (H200 host only) — vLLM serving olmOCR-2-7B-FP8
-docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
 ```
 
 Then open **http://localhost:8005**, paste an operator-provisioned JWT on the
