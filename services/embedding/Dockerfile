@@ -19,8 +19,8 @@ COPY services/ingestion/config.py /app/services/ingestion/config.py
 COPY services/ingestion/chunker.py /app/services/ingestion/chunker.py
 COPY services/ingestion/tree.py /app/services/ingestion/tree.py
 COPY services/ingestion/identifiers.py /app/services/ingestion/identifiers.py
-COPY services/embedding/ /app/
+COPY services/embedding/ /app/services/embedding/
 # Model artifacts mount READ-ONLY at /models (host registry). Missing model
 # dir must fail startup loudly — never download at runtime.
 EXPOSE 8003
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "services.embedding.main:app", "--host", "0.0.0.0", "--port", "8003"]
