@@ -553,7 +553,9 @@ def _embed_chunks(chunks: list[Chunk], parse_out: dict, version,
                 vector=vector,
                 group_id=group_id,
             )
-            records.append(rec.to_milvus_record())
+            img_record = rec.to_milvus_record()
+            img_record["metadata"]["filename"] = filename
+            records.append(img_record)
     return records
 
 
