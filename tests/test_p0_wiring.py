@@ -26,10 +26,13 @@ def test_ingestion_worker_does_not_implicitly_use_mock_defaults():
 
 
 def test_service_dockerfiles_run_packages_not_top_level_relative_imports():
-    for service in ("retrieval", "embedding", "gateway"):
+    for service in ("retrieval", "embedding"):
         dockerfile = _read(f"services/{service}/Dockerfile")
         assert f"services.{service}.main:app" in dockerfile
         assert f"/app/services/{service}/" in dockerfile
+    gateway = _read("services/gateway/Dockerfile")
+    assert "services.gateway.app:app" in gateway
+    assert "/app/services/gateway/" in gateway
 
 
 def test_shared_backend_network_minimized():
