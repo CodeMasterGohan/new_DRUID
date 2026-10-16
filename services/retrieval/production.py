@@ -96,8 +96,12 @@ class MilvusVectorStore(VectorStore):
             document_id=str(row["document_id"]),
             document_version=str(row["document_version"]),
             filename=str(metadata.get("filename") or "document"),
-            page_start=int(row.get("page_start") or 1),
-            page_end=int(row.get("page_end") or row.get("page_start") or 1),
+            page_start=int(row["page_start"]) if row.get("page_start") is not None else 1,
+            page_end=(
+                int(row["page_end"]) if row.get("page_end") is not None
+                else int(row["page_start"]) if row.get("page_start") is not None
+                else 1
+            ),
             heading_path=tuple(metadata.get("heading_path") or ()),
             text=str(row.get("text") or ""),
             provenance=provenance,
