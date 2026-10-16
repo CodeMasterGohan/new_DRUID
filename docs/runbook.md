@@ -101,6 +101,15 @@ docker compose --env-file .env -f deploy/docker-compose.gpu.yml up -d vllm-olmoc
 docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
 ```
 
+### Host HTTPS gateway for the Web UI
+
+Web UI port 8005 binds to loopback by default. For external clients, use a
+host-level reverse proxy with a valid certificate (reference example:
+`deploy/nginx-web-ui-https.conf.example`) and keep the upstream at
+`127.0.0.1:8005`. Do not set `WEB_UI_BIND_IP=0.0.0.0` to bypass TLS.
+Leave `COOKIE_SECURE=true` in production. Check login/logout and upload
+through the HTTPS hostname before granting user access.
+
 ## 3. Smoke tests
 
 ```bash
