@@ -147,9 +147,11 @@ class RetrievalService:
         # modalities are available. The previous text-first truncation made
         # page images unreachable whenever >= final_results text hits existed.
         image_slots = (
-            min(len(image_records), cfg.max_page_image_results,
-                max(1, cfg.final_results // 4))
-            if reranked and image_records and cfg.final_results > 1
+            0 if reranked and cfg.final_results == 1
+            else min(
+                len(image_records), cfg.max_page_image_results,
+                max(1, cfg.final_results // 4)
+            ) if reranked
             else min(len(image_records), cfg.final_results)
         )
         text_slots = cfg.final_results - image_slots
