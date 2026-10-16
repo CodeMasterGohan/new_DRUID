@@ -21,6 +21,7 @@ httpx==0.28.1
 pydantic==2.11.7
 pydantic-settings==2.7.1
 structlog==25.1.0
+pymilvus==2.5.6  # required by real MilvusIndexSink
 # EmbeddingGemma 2 backend (CPU, sentence-transformers) + MiniLM tokenizer.
 # Model WEIGHTS are never downloaded: backends fail closed unless the
 # pre-staged artifact paths (EMBEDDING_MODEL_PATH, MINILM_TOKENIZER_PATH)
