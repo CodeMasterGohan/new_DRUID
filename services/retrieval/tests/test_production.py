@@ -16,7 +16,7 @@ def test_embed_client_strips_existing_prompt_exactly_once(monkeypatch):
     original_client = httpx.Client
     class Client:
         def __init__(self, timeout):
-            self.client = httpx.Client(transport=transport)
+            self.client = original_client(transport=transport)
         def __enter__(self):
             return self.client
         def __exit__(self, *args):
