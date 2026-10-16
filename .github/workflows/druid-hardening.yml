@@ -1,0 +1,31 @@
+name: DRUID reliability contracts
+on:
+  push:
+    branches:
+      - improvements/retrieval-reliability-20261016
+  pull_request:
+jobs:
+  fast-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install lightweight test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest==8.3.5 fastapi==0.115.8 httpx==0.28.1 \
+            sqlalchemy==2.0.38 psycopg[binary]==3.2.9 \
+            pydantic==2.11.7 pydantic-settings==2.7.1 PyYAML==6.0.2
+          python -m pip check
+      - name: Compile source
+        run: python -m compileall -q services tests
+      - name: Execute retrieval and deployment contracts (mocked backends)
+        run: |
+          python -m pytest -q services/retrieval/tests tests/test_p0_wiring.py
+      - name: Validate Docker Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose -f deploy/docker-compose.yml config --quiet
+          docker compose -f deploy/docker-compose.gpu.yml config --quiet
