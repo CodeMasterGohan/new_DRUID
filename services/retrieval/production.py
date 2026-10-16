@@ -90,6 +90,7 @@ class MilvusVectorStore(VectorStore):
         provenance = metadata.get("detection_provenance") or "native-detected"
         if provenance not in ("native-detected", "olmocr-routed"):
             provenance = "native-detected"
+        metadata = {**metadata, "chunk_order": row.get("chunk_order")}
         return StoredRecord(
             chunk_id=str(row["chunk_id"]),
             document_id=str(row["document_id"]),
