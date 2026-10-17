@@ -46,11 +46,13 @@ class DruidApiClient:
         token: str,
         timeout_seconds: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        selected_group: str = "",
     ) -> None:
         self._base = gateway_url.rstrip("/")
         self._token = token
         self._timeout = timeout_seconds
         self._transport = transport
+        self._selected_group = selected_group
 
     def _client(self) -> httpx.AsyncClient:
         # The user's token is the ONLY identity signal. No tenant headers,
@@ -58,7 +60,11 @@ class DruidApiClient:
         # token and strips anything spoofable.
         return httpx.AsyncClient(
             base_url=self._base,
-            headers={"Authorization": f"Bearer {self._token}"},
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                **({"X-Group-Selection": self._selected_group}
+                   if self._selected_group else {}),
+            },
             timeout=self._timeout,
             transport=self._transport,
         )
@@ -83,6 +89,37 @@ class DruidApiClient:
             return resp.json()
         except Exception:
             return resp.text
+
+    async def identity(self) -> dict:
+        return await self._request("GET", "/v1/identity/me")
+
+    async def admin_list_users(self) -> dict:
+        return await self._request("GET", "/v1/admin/users")
+
+    async def admin_create_user(self, data: dict) -> dict:
+        return await self._request("POST", "/v1/admin/users", json=data)
+
+    async def admin_update_user(self, subject: str, data: dict) -> dict:
+        return await self._request("PATCH", f"/v1/admin/users/{subject}", json=data)
+
+    async def admin_list_groups(self) -> dict:
+        return await self._request("GET", "/v1/admin/groups")
+
+    async def admin_create_group(self, name: str) -> dict:
+        return await self._request("POST", "/v1/admin/groups", json={"name": name})
+
+    async def admin_set_member(self, group: str, subject: str, role: str) -> dict:
+        from urllib.parse import quote
+        return await self._request(
+            "PUT", f"/v1/admin/groups/{quote(group)}/members/{quote(subject, safe='')}",
+            json={"subject": subject, "role": role},
+        )
+
+    async def admin_remove_member(self, group: str, subject: str) -> dict:
+        from urllib.parse import quote
+        return await self._request(
+            "DELETE", f"/v1/admin/groups/{quote(group)}/members/{quote(subject, safe='')}"
+        )
 
     # -- documents --------------------------------------------------------
 
