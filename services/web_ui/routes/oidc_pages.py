@@ -33,7 +33,9 @@ def _settings(request: Request):
     if cfg.druid_auth_mode != "keycloak":
         raise HTTPException(status_code=404)
     if not (cfg.oidc_issuer and cfg.oidc_client_id and cfg.oidc_redirect_uri
-            and cfg.oidc_session_secret and cfg.jwks_url):
+            and cfg.oidc_session_secret and cfg.jwks_url
+            and len(cfg.oidc_session_secret) >= 32
+            and cfg.oidc_session_secret.lower() not in ("change-me", "changeme")):
         raise HTTPException(status_code=503, detail="OIDC is not configured")
     for url in (cfg.oidc_issuer, cfg.oidc_redirect_uri):
         if not url.startswith("https://") and not cfg.oidc_allow_insecure_http:
