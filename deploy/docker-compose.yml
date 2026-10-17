@@ -125,6 +125,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+    - "${API_BIND_IP:-127.0.0.1}:${API_PORT:-8000}:8000"
     restart: unless-stopped
 
     networks:
@@ -150,8 +154,7 @@ services:
       dockerfile: services/mcp_server/Dockerfile
     env_file:
     - ../.env
-    ports:
-    - "${MCP_BIND_IP:-127.0.0.1}:${MCP_PORT:-8002}:8002"
+    # MCP is internal-only. The gateway owns authenticated /mcp access.
     depends_on:
     - document_api
     - retrieval
@@ -160,7 +163,6 @@ services:
 
     networks:
     - default
-    - cora
   web_ui:
     build:
       context: ..
@@ -179,7 +181,6 @@ services:
 
     networks:
     - default
-    - cora
   embedding:
     build:
       context: ..
@@ -242,9 +243,6 @@ services:
 
 
 networks:
-  cora:
-    name: cora
-    external: true
   druid-net:
     name: druid-net
     external: true
