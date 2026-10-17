@@ -17,10 +17,14 @@ from __future__ import annotations
 
 import logging
 import uuid
+import os
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from services.catalog.identity import IdentityDenied, resolve, provision_first_admin
 
 from services.common.request_context import RequestContext
 
@@ -62,6 +66,9 @@ class GatewaySettings(BaseSettings):
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
     jwks_url: str | None = None
+    auth_mode: str = "legacy"  # set DRUID_AUTH_MODE=keycloak for production
+    database_url: str | None = None
+    druid_bootstrap_admin_sub: str = ""
 
     def jwt_settings(self) -> JWTSettings:
         algorithms = tuple(
@@ -127,6 +134,21 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     app = FastAPI(title="new_DRUID gateway", version="0.1.0")
     app.state.settings = settings
     app.state.quota_store = quota_store
+    identity_sessions = None
+    if settings.auth_mode == "keycloak":
+        if (settings.jwt_algorithms != "RS256" or not settings.jwt_issuer
+                or not settings.jwt_audience or not settings.jwks_url
+                or not settings.database_url):
+            raise RuntimeError(
+                "Keycloak mode requires RS256, JWT_ISSUER, JWT_AUDIENCE, "
+                "JWKS_URL and DATABASE_URL"
+            )
+        identity_sessions = sessionmaker(
+            bind=create_engine(settings.database_url, pool_pre_ping=True),
+            expire_on_commit=False,
+        )
+    elif settings.auth_mode != "legacy":
+        raise RuntimeError("unknown DRUID_AUTH_MODE")
 
     # -- 1. strip spoofable identity headers from every inbound request ------
     @app.middleware("http")
@@ -148,15 +170,37 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
         if scheme.lower() != "bearer" or not token.strip():
             raise _AuthHTTPError("missing bearer token")
         try:
-            claims = validate_token(token.strip(), jwt_settings)
+            claims = validate_token(
+                token.strip(), jwt_settings,
+                require_group=settings.auth_mode != "keycloak",
+            )
         except AuthError as exc:
             raise _AuthHTTPError(str(exc)) from exc
+        group = claims["group_id"]
+        roles = claims["roles"]
+        if identity_sessions is not None:
+            selected = request.headers.get("x-group-selection") or None
+            if selected is not None and len(selected) > 255:
+                raise _AuthHTTPError("invalid group selection")
+            try:
+                with identity_sessions.begin() as session:
+                    try:
+                        actor = resolve(session, claims["user_id"], selected)
+                    except IdentityDenied:
+                        # Only explicitly configured initial administrator can
+                        # seed DB identity, and only while no admin exists.
+                        if settings.druid_bootstrap_admin_sub != claims["user_id"]:
+                            raise
+                        provision_first_admin(session, claims["user_id"],
+                                              settings.druid_bootstrap_admin_sub)
+                        actor = resolve(session, claims["user_id"], selected)
+                    group, roles = actor.group_id, actor.roles
+            except IdentityDenied as exc:
+                raise _AuthHTTPError(str(exc)) from exc
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         return RequestContext(
-            user_id=claims["user_id"],
-            group_id=claims["group_id"],
-            roles=claims["roles"],
-            request_id=request_id,
+            user_id=claims["user_id"], group_id=group,
+            roles=roles, request_id=request_id,
         )
 
     @app.exception_handler(_AuthHTTPError)
