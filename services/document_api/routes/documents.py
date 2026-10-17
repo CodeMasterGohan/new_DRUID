@@ -732,6 +732,11 @@ def delete_document(
         raise _to_http(exc)
 
     context = repo.context
+    if (settings.druid_auth_mode == "keycloak"
+            and "group_admin" not in context.roles
+            and "admin" not in context.roles
+            and doc.created_by != context.user_id):
+        raise HTTPException(status_code=403, detail="not the document owner")
     log.info(
         "delete start: document=%s group=%s request_id=%s",
         document_id,
