@@ -83,7 +83,6 @@ cp .env.example .env   # fill secrets
 # 0. Shared network for cross-project DNS (ingestion workers → vLLM).
 #    Both compose projects attach to it as external. Create once per host.
 docker network create druid-net
-docker network create cora  # only if absent; web UI and MCP still use it
 
 # 1. Infrastructure
 docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
@@ -103,12 +102,21 @@ docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr
 
 ### Host HTTPS gateway for the Web UI
 
-Web UI port 8005 binds to loopback by default. For external clients, use a
-host-level reverse proxy with a valid certificate (reference example:
-`deploy/nginx-web-ui-https.conf.example`) and keep the upstream at
-`127.0.0.1:8005`. Do not set `WEB_UI_BIND_IP=0.0.0.0` to bypass TLS.
-Leave `COOKIE_SECURE=true` in production. Check login/logout and upload
-through the HTTPS hostname before granting user access.
+Web UI port 8005 and API gateway port 8000 bind to loopback. Serve both
+through a host-level TLS reverse proxy, with `/v1/*` and `/mcp`
+forwarded to the gateway at `127.0.0.1:8000`, and the remaining paths
+forwarded to the UI at `127.0.0.1:8005`. See
+`deploy/nginx-web-ui-https.conf.example`. Do not expose the internal MCP
+port or set `WEB_UI_BIND_IP=0.0.0.0`. Keep Secure cookies enabled.
+Configure Keycloak client ID, issuer, public JWKS endpoint, redirect URI,
+RS256 access-token audience `druid-api`, and a long random OIDC_SESSION_SECRET.
+Set DRUID_BOOTSTRAP_ADMIN_SUB to the **exact Keycloak sub** for the first
+administrator. Run migration 0002_identity_groups before logging in.
+After the first admin logs in, remove the bootstrap subject and use the
+authenticated `/v1/admin/users` and `/v1/admin/groups` API endpoints to
+provision users and memberships. Groups are wholly managed in DRUID, not
+mirrored from Keycloak. Verify multi-group switching and immediate membership
+revocation with real signed Keycloak JWTs.
 
 ## 3. Smoke tests
 
