@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # services tree layout must exist in the image (not just gateway's files).
 COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
+COPY services/catalog/ /app/services/catalog/
 COPY services/gateway/ /app/services/gateway/
 EXPOSE 8000
 CMD ["uvicorn", "services.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
