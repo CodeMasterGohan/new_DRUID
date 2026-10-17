@@ -19,6 +19,8 @@ own explicit trusted credential context. Gateway headers never apply to it.
 from __future__ import annotations
 
 import logging
+import hmac
+import hashlib
 import os
 import time
 from dataclasses import dataclass
@@ -42,7 +44,7 @@ from .http_clients import (
     HttpIngestionClient,
     HttpRetrievalClient,
 )
-from .context import clear_context, set_context
+from .context import clear_context, set_context, RequestContext as MCPContext
 from . import tools as tool_impls
 from .models import (
     DeleteDocumentArgs,
@@ -82,6 +84,7 @@ class Settings:
     retrieval_url: str = ""
     document_api_url: str = ""
     internal_secret: str = ""
+    gateway_internal_auth: bool = False
     downstream_timeout_seconds: float = 30.0
 
     @classmethod
@@ -111,6 +114,7 @@ class Settings:
             retrieval_url=os.getenv("RETRIEVAL_URL", "").rstrip("/"),
             document_api_url=os.getenv("DOCUMENT_API_URL", "").rstrip("/"),
             internal_secret=os.getenv("INTERNAL_SECRET", ""),
+            gateway_internal_auth=os.getenv("DRUID_AUTH_MODE") == "keycloak",
             downstream_timeout_seconds=timeout,
         )
 
@@ -118,10 +122,32 @@ class Settings:
 class AuthMiddleware(BaseHTTPMiddleware):
     """Validate bearer tokens and install the trusted request context."""
 
-    def __init__(self, app, verifier: TokenVerifier, allowed_origins: tuple[str, ...]):
+    def __init__(self, app, verifier: TokenVerifier, allowed_origins: tuple[str, ...],
+                 gateway_secret: str = ""):
         super().__init__(app)
         self._verifier = verifier
         self._allowed_origins = allowed_origins
+        self._gateway_secret = gateway_secret
+
+    def _gateway_context(self, request: Request) -> MCPContext:
+        """Accept only a properly signed internal identity from the gateway."""
+        get = request.headers.get
+        user, group, roles, rid = (
+            get("x-druid-user-id", ""), get("x-druid-group-id", ""),
+            get("x-druid-roles", ""), get("x-druid-request-id", ""),
+        )
+        signature = get("x-druid-internal-sig", "")
+        if not all((user, group, rid, signature)):
+            raise AuthError("missing signed gateway identity")
+        parsed_roles = tuple(sorted(set(x for x in roles.split(",") if x)))
+        canonical = f"druid-v1|{user}|{group}|{','.join(parsed_roles)}|{rid}"
+        expected = "v1:" + hmac.new(
+            self._gateway_secret.encode(), canonical.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            raise AuthError("gateway signature mismatch")
+        return MCPContext(user_id=user, group_id=group,
+                          roles=frozenset(parsed_roles), request_id=rid)
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -153,22 +179,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("authorization", "")
         scheme, _, token = auth.partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
-            log.warning(
-                "mcp auth → 401: missing or malformed Authorization header path=%s",
-                request.url.path,
-            )
-            return JSONResponse(
-                {"error": "missing or malformed Authorization header"},
-                status_code=401,
-            )
+            return JSONResponse({"error": "missing bearer token"}, status_code=401)
         try:
-            claims = self._verifier.verify(token.strip())
+            if self._gateway_secret:
+                ctx = self._gateway_context(request)
+            else:
+                claims = self._verifier.verify(token.strip())
+                ctx = context_from_claims(claims)
         except AuthError as exc:
             log.warning("mcp auth → 401: %s path=%s", exc, request.url.path)
             return JSONResponse({"error": str(exc)}, status_code=401)
 
-        # 4. Install the validated context for this request only.
-        ctx = context_from_claims(claims)
+        # Install validated DB-derived context for this request only.
         token_handle = set_context(ctx)
         try:
             response = await call_next(request)
@@ -330,10 +352,11 @@ def create_app(
 ) -> Starlette:
     """Build the Streamable HTTP MCP application."""
     settings = settings or Settings.from_env()
-    if not settings.jwt_secret:
-        raise RuntimeError(
-            "JWT_SECRET (HS256) or JWT_PUBLIC_KEY_PEM (RS256) is required"
-        )
+    if settings.gateway_internal_auth:
+        if not settings.internal_secret or settings.internal_secret == "change-me":
+            raise RuntimeError("MCP gateway mode requires a strong INTERNAL_SECRET")
+    elif not settings.jwt_secret:
+        raise RuntimeError("JWT_SECRET or JWT_PUBLIC_KEY_PEM is required")
     deps = deps or _default_deps(settings)
     log.info(
         "starting mcp_server (streamable http): jwt_algs=%s jwt_issuer=%s "
@@ -361,7 +384,8 @@ def create_app(
     inner = mcp.streamable_http_app()
     app = Starlette(routes=[Mount("/mcp", app=inner)])
     app.add_middleware(
-        AuthMiddleware, verifier=verifier, allowed_origins=settings.allowed_origins
+        AuthMiddleware, verifier=verifier, allowed_origins=settings.allowed_origins,
+        gateway_secret=settings.internal_secret if settings.gateway_internal_auth else "",
     )
     return app
 
