@@ -32,6 +32,7 @@ def api_for(identity: Identity, request: Request) -> DruidApiClient:
     return DruidApiClient(
         gateway_url=settings.gateway_url,
         token=identity.token,
+        selected_group=identity.group_id,
         timeout_seconds=settings.forward_timeout_seconds,
         transport=transport,
     )
@@ -53,6 +54,8 @@ NOTICES = {
 #: Top-level nav sections, matched by path prefix (longest first).
 _NAV_SECTIONS = (
     ("/admin/documents", "admin-documents"),
+    ("/admin/groups", "admin-groups"),
+    ("/groups", "groups"),
     ("/admin/jobs", "admin-jobs"),
     ("/admin/quotas", "admin-quotas"),
     ("/upload", "upload"),
