@@ -16,6 +16,7 @@ class DocumentApiSettings(BaseSettings):
     """document_api configuration from the environment."""
 
     model_config = SettingsConfigDict(extra="ignore")
+    druid_auth_mode: str = "legacy"
 
     # --- catalog (PostgreSQL) ---
     database_url: str = (
