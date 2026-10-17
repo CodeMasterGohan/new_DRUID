@@ -419,3 +419,26 @@ def test_notice_banner_renders(client: TestClient):
     body = _html(client.get("/documents?notice=deleted"))
     assert 'class="notice"' in body
     assert "Deletion queued" in body
+
+
+def test_login_redirect_is_same_origin_only(client: TestClient):
+    token = make_token("group-a")
+    for unsafe in (
+        "//external.invalid/path",
+        "///external.invalid",
+        "/%2fexternal.invalid",
+        "/%255cexternal.invalid",
+        "/\\external.invalid",
+        "https://external.invalid/",
+    ):
+        response = client.post(
+            "/login", data={"token": token, "next": unsafe}, follow_redirects=False
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/documents"
+    safe = client.post(
+        "/login", data={"token": token, "next": "/documents?sort=recent"},
+        follow_redirects=False,
+    )
+    assert safe.status_code == 303
+    assert safe.headers["location"] == "/documents?sort=recent"

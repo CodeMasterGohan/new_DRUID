@@ -56,14 +56,17 @@ def get_identity(request: Request, settings: JWTSettings) -> Identity:
     if not raw:
         raise NotAuthenticated("no session cookie")
     try:
-        claims = validate_token(raw, settings)
+        oidc = request.app.state.web_ui_settings.druid_auth_mode == "keycloak"
+        claims = validate_token(raw, settings, require_group=not oidc)
     except AuthError as exc:
         log.info("invalid session token: %s", exc)
         raise NotAuthenticated(str(exc)) from exc
     return Identity(
         user_id=claims["user_id"],
-        group_id=claims["group_id"],
-        roles=tuple(claims["roles"]),
+        group_id=(request.cookies.get("druid_selected_group", "")
+                  if oidc else claims["group_id"]),
+        # Keycloak token roles are not DRUID admin privileges.
+        roles=("user",) if oidc else tuple(claims["roles"]),
         token=raw,
     )
 

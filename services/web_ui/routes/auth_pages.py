@@ -26,10 +26,35 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _safe_next(target: str) -> str:
+    """Allow only same-origin absolute paths, including after URL decoding."""
+    from urllib.parse import unquote, urlsplit
+
+    if not isinstance(target, str):
+        return "/documents"
+    candidate = target
+    for _ in range(3):
+        if (not candidate.startswith("/") or candidate.startswith("//")
+                or chr(92) in candidate
+                or any(ord(char) < 32 or ord(char) == 127 for char in candidate)):
+            return "/documents"
+        parsed = urlsplit(candidate)
+        if parsed.scheme or parsed.netloc or parsed.path.startswith("//"):
+            return "/documents"
+        decoded = unquote(candidate)
+        if decoded == candidate:
+            return target
+        candidate = decoded
+    return "/documents"
+
+
 @router.get("/login")
 def login_form(request: Request, next: str = "/documents"):
-    if next != "/" and not next.startswith("/"):
-        next = "/documents"  # open-redirect guard
+    next = _safe_next(next)
+    if request.app.state.web_ui_settings.druid_auth_mode == "keycloak":
+        from urllib.parse import quote
+        return RedirectResponse(url="/auth/oidc/start?next=" + quote(next, safe=""),
+                                status_code=303)
     try:
         current_identity(request)
         return RedirectResponse(url=next, status_code=303)
@@ -46,9 +71,11 @@ def login_submit(
     token: str = Form(...),
     next: str = Form(default="/documents"),
 ):
-    """Validate the pasted token and establish the session cookie."""
-    if next != "/" and not next.startswith("/"):
-        next = "/documents"
+    """Legacy paste-token mode only. Keycloak requires proper OIDC callback."""
+    if request.app.state.web_ui_settings.druid_auth_mode == "keycloak":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="token-paste login disabled")
+    next = _safe_next(next)
     token = (token or "").strip()
     try:
         validate_token(token, request.app.state.jwt_settings)

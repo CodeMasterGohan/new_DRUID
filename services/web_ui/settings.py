@@ -14,6 +14,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class WebUISettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
+    druid_auth_mode: str = "legacy"  # production: keycloak
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = ""
+    oidc_session_secret: str = ""
+    oidc_allow_insecure_http: bool = False
+
     # Downstream: everything goes through the gateway with the user's token.
     gateway_url: str = "http://gateway:8000"
     forward_timeout_seconds: float = 30.0

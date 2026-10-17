@@ -60,7 +60,7 @@ async def forward_request(
     headers: dict[str, str] = {}
     for name, value in request.headers.items():
         lowered = name.lower()
-        if lowered in _HOP_BY_HOP or lowered in SPOOFABLE_HEADERS:
+        if lowered in _HOP_BY_HOP or lowered in SPOOFABLE_HEADERS or lowered == "x-group-selection":
             continue
         headers[name] = value
     headers.update(build_internal_headers(context, internal_secret))

@@ -121,8 +121,11 @@ class CatalogRepository:
         smuggle one in: any caller-supplied value is ignored and the trusted
         context's tenant is used (§4 "safe writes").
         """
+        # Caller-supplied owner values are never trusted.
+        kwargs.pop("created_by", None)
         doc = Document(
             tenant_id=self._tenant_id(),
+            created_by=self.context.user_id,
             display_name=display_name,
             content_checksum=content_checksum,
             **kwargs,

@@ -283,7 +283,16 @@ def search_page(request: Request):
 # ---------------------------------------------------------------------------
 
 
-def _require_admin(request: Request, identity) -> HTMLResponse | None:
+async def _require_admin(request: Request, identity) -> HTMLResponse | None:
+    if (not identity.is_admin and
+            request.app.state.web_ui_settings.druid_auth_mode == "keycloak"):
+        try:
+            me = await api_for(identity, request).identity()
+            if me.get("is_system_admin"):
+                request.state.system_admin = True
+                return None
+        except ApiError:
+            pass
     if not identity.is_admin:
         return get_templates().TemplateResponse(
             "error.html",
@@ -303,7 +312,7 @@ async def admin_documents_page(request: Request, tenant: str = Query(default="")
         identity = current_identity(request)
     except NotAuthenticated:
         return login_redirect(request)
-    denied = _require_admin(request, identity)
+    denied = await _require_admin(request, identity)
     if denied is not None:
         return denied
     backend_missing = False
@@ -335,7 +344,7 @@ async def admin_jobs_page(request: Request, tenant: str = Query(default="")):
         identity = current_identity(request)
     except NotAuthenticated:
         return login_redirect(request)
-    denied = _require_admin(request, identity)
+    denied = await _require_admin(request, identity)
     if denied is not None:
         return denied
     backend_missing = False
@@ -363,7 +372,7 @@ async def admin_quotas_page(request: Request):
         identity = current_identity(request)
     except NotAuthenticated:
         return login_redirect(request)
-    denied = _require_admin(request, identity)
+    denied = await _require_admin(request, identity)
     if denied is not None:
         return denied
     backend_missing = False

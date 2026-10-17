@@ -84,6 +84,29 @@ class Tenant(Base):
     )
 
 
+class DruidUser(Base):
+    """Keycloak OIDC subject; never a locally managed password."""
+    __tablename__ = "druid_users"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    username: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    email: Mapped[str | None] = mapped_column(String(320))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    is_system_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class GroupMembership(Base):
+    """Membership and group-specific role managed only by DRUID admins."""
+    __tablename__ = "group_memberships"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("druid_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(24), nullable=False, default="member")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint("user_id", "tenant_id", name="uq_user_tenant_membership"),)
+
+
 class Document(Base):
     """A logical document owned by a tenant.
 
@@ -98,6 +121,7 @@ class Document(Base):
         ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     display_name: Mapped[str] = mapped_column(String(1024), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     content_checksum: Mapped[str] = mapped_column(String(128), nullable=False)
     # Pointer to the currently searchable version. The FK is added after
     # document_versions exists (use_alter) because the two tables reference

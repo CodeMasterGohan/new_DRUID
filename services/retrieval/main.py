@@ -21,6 +21,8 @@ from services.common.request_context import RequestContext
 from .citations import wrap_passage
 from .config import RetrievalConfig
 from .service import RetrievalService
+from .catalog_port import SqlAlchemyCatalogPort
+from .production import HttpEmbeddingClient, MilvusVectorStore, MiniLMReranker
 
 log = logging.getLogger("retrieval")
 
@@ -60,6 +62,38 @@ def _verify_internal_headers(
 app = FastAPI(title="new_DRUID retrieval service")
 
 _service: RetrievalService | None = None
+
+
+def build_service() -> RetrievalService:
+    """Construct production dependencies; fail startup if any are unavailable."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    database_url = os.environ.get("DATABASE_URL")
+    model_path = os.environ.get("MINILM_MODEL_PATH")
+    if not database_url or not model_path:
+        raise RuntimeError("DATABASE_URL and MINILM_MODEL_PATH are required")
+    cfg = RetrievalConfig.from_env()
+    engine = create_engine(database_url, pool_pre_ping=True)
+    return RetrievalService(
+        embedding=HttpEmbeddingClient(
+            os.environ.get("EMBEDDING_URL", "http://embedding:8003"),
+            dimension=cfg.embedding_dimension,
+        ),
+        vector_store=MilvusVectorStore(
+            os.environ.get("MILVUS_URI", "http://milvus:19530"),
+            os.environ.get("MILVUS_ALIAS", "project_knowledge_base"),
+        ),
+        catalog=SqlAlchemyCatalogPort(sessionmaker(bind=engine)),
+        reranker=MiniLMReranker(model_path),
+        config=cfg,
+    )
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    if _service is None:
+        wire(build_service())
 
 
 def get_service() -> RetrievalService:
@@ -116,19 +150,35 @@ async def search(
             x_druid_request_id or "-",
         )
         raise HTTPException(status_code=400, detail="invalid JSON body")
-    query = (body.get("query") or "").strip()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="expected JSON object")
+    query = body.get("query")
+    if not isinstance(query, str):
+        raise HTTPException(status_code=400, detail="query must be a string")
+    query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
+    wants_diagnostics = body.get("diagnostics", False) is True
+    if wants_diagnostics and (
+        os.environ.get("DRUID_RETRIEVAL_DIAGNOSTICS") != "1"
+        or "admin" not in context.roles
+    ):
+        raise HTTPException(status_code=403, detail="retrieval diagnostics not permitted")
+    trace = {} if wants_diagnostics else None
     results = get_service().search(
         context,
         query,
         task_hint=body.get("task_hint"),
         expand_neighbors=body.get("expand_neighbors"),
+        diagnostics=trace,
     )
-    return {
+    payload = {
         "results": [r.to_dict() for r in results],
         "passages": [wrap_passage(r) for r in results],
     }
+    if trace is not None:
+        payload["diagnostics"] = trace
+    return payload
 
 
 @app.exception_handler(Exception)

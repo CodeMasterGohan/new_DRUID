@@ -85,27 +85,45 @@ cp .env.example .env   # fill secrets
 docker network create druid-net
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
+docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
 
 # 2. Schema + migrations (one-shot jobs, must exit 0)
-docker compose -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
-docker compose -f deploy/docker-compose.yml run --rm milvus_setup   # collections + indexes
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm catalog        # alembic upgrade head
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm milvus_setup   # collections + indexes
 
 # 3. CPU services
-docker compose -f deploy/docker-compose.yml up -d gateway document_api mcp_server embedding retrieval
-docker compose -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
+docker compose --env-file .env -f deploy/docker-compose.yml up -d gateway document_api mcp_server embedding retrieval
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --scale ingestion=4 ingestion
 
 # 4. GPU plane (H200 host only)
-docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
-docker compose -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/health   # vLLM health (internal-only port)
 ```
+
+### Host HTTPS gateway for the Web UI
+
+Web UI port 8005 and API gateway port 8000 bind to loopback. Serve both
+through a host-level TLS reverse proxy, with `/v1/*` and `/mcp`
+forwarded to the gateway at `127.0.0.1:8000`, and the remaining paths
+forwarded to the UI at `127.0.0.1:8005`. See
+`deploy/nginx-web-ui-https.conf.example`. Do not expose the internal MCP
+port or set `WEB_UI_BIND_IP=0.0.0.0`. Keep Secure cookies enabled.
+Configure Keycloak client ID, issuer, public JWKS endpoint, redirect URI,
+RS256 access-token audience `druid-api`, and a long random OIDC_SESSION_SECRET.
+Set DRUID_BOOTSTRAP_ADMIN_SUB to the **exact Keycloak sub** for the first
+administrator. Run migration 0002_identity_groups before logging in.
+After the first admin logs in, remove the bootstrap subject and use the
+authenticated `/v1/admin/users` and `/v1/admin/groups` API endpoints to
+provision users and memberships. Groups are wholly managed in DRUID, not
+mirrored from Keycloak. Verify multi-group switching and immediate membership
+revocation with real signed Keycloak JWTs.
 
 ## 3. Smoke tests
 
 ```bash
 # Gateway rejects unauthenticated requests (gateway port is internal-only;
 # reach it via the compose network)
-docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 401/403 without token
+docker compose --env-file .env -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/healthz   # expect 200 (unauthenticated health endpoint)
 
 # Milvus collection exists with the alias
 # (via milvus_setup logs or pymilvus: utility.has_collection("project_knowledge_base_v1"))
@@ -114,7 +132,7 @@ docker compose -f deploy/docker-compose.yml exec gateway curl -s -o /dev/null -w
 docker compose logs embedding | grep -i "offline\|model loaded"
 
 # vLLM serves the FP8 checkpoint
-curl http://localhost:8000/v1/models   # expect served-model-name olmocr-2-fp8
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/v1/models   # internal-only vLLM endpoint
 ```
 
 ## 4. Offline verification (§3 step 7)

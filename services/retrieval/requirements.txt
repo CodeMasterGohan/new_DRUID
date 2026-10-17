@@ -15,3 +15,6 @@ pydantic==2.11.7
 pydantic-settings==2.7.1
 structlog==25.1.0
 pytest==8.3.5
+# CrossEncoder loads only pre-staged local model paths.
+sentence-transformers==6.1.0
+transformers==5.18.0

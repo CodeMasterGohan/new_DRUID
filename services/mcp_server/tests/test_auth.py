@@ -22,7 +22,7 @@ def mint(*, secret=SECRET, issuer=ISSUER, audience=AUDIENCE, exp_offset=3600,
          extra_claims=None, drop=()):
     payload = {
         "sub": "u1",
-        "grp": "acme",
+        "group_id": "acme",
         "roles": ["member"],
         "iss": issuer,
         "aud": audience,
@@ -60,11 +60,19 @@ def test_verifier_rejects_missing_claims():
     with pytest.raises(AuthError):
         make_verifier().verify(mint(drop=("sub",)))
     with pytest.raises(AuthError):
-        make_verifier().verify(mint(drop=("grp",)))
+        make_verifier().verify(mint(drop=("group_id",)))
     with pytest.raises(AuthError):
         make_verifier().verify(mint(extra_claims={"roles": []}))
     with pytest.raises(AuthError):
         make_verifier().verify("")
+
+
+def test_mcp_rejects_conflicting_legacy_tenant_claim():
+    with pytest.raises(AuthError, match="conflicting tenant"):
+        make_verifier().verify(mint(extra_claims={"grp": "other-tenant"}))
+    with pytest.raises(AuthError, match="tenant"):
+        make_verifier().verify(mint(drop=("group_id",), extra_claims={"grp": "acme"}))
+    assert make_verifier().verify(mint(extra_claims={"grp": "acme"})).group_id == "acme"
 
 
 def test_context_from_claims_generates_request_id():

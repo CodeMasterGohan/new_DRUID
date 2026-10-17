@@ -1,0 +1,48 @@
+# Example HOST-LEVEL Nginx configuration for DRUID.
+# NOT active until installed and real certificates/domain are supplied.
+# The Web UI remains bound to 127.0.0.1:8005 in Docker Compose.
+server {
+    listen 443 ssl http2;
+    server_name druid.example.invalid;  # Replace with your actual DNS name
+
+    ssl_certificate /etc/ssl/druid/fullchain.pem;      # Install real cert
+    ssl_certificate_key /etc/ssl/druid/privkey.pem;    # Install private key
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    client_max_body_size 210m;  # Must agree with Web UI / gateway upload policy
+    # Keycloak automation and user requests use the SAME JWT-authenticated
+    # gateway API. No direct document_api or mcp_server exposure.
+    location /v1/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Group-Selection $http_x_group_selection;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 120s;
+    }
+    location /mcp {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-Group-Selection $http_x_group_selection;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 300s;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:8005;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
+    }
+}
