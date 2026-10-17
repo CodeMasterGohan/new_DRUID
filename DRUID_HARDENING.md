@@ -65,6 +65,61 @@ Do not treat mock-backed CI as production acceptance.
   must be reingested with catalog `version_number` into a staged collection.
   Rollback requires a preserved snapshot and alias.
 
+## Keycloak SSO, DRUID groups, and API-only administration
+
+The production auth mode is `DRUID_AUTH_MODE=keycloak`. Browser login uses
+Keycloak Authorization Code + PKCE, OIDC nonce/state checks, RS256 identity
+and access JWT validation and secure HttpOnly cookies. The paste-token login
+route is rejected in this mode. The Keycloak client must supply an access
+token with `aud=druid-api`; login ID tokens target the `OIDC_CLIENT_ID`.
+The Keycloak realm must be reachable from the web_ui and gateway containers.
+
+**Keycloak is the identity provider, not the DRUID authorization database.**
+The only trusted external user identifier is the verified `sub` claim. User
+accounts, active/disabled status, system-admin status, groups, memberships
+and `member` / `manager` roles are stored in Postgres by the 0002 migration.
+Neither Keycloak `roles` nor `groups` are DRUID permissions. One user can
+belong to several groups. `X-Group-Selection` is a request-scoped selector:
+it must be DB-authorized by the gateway on *every* request; backend document
+APIs re-check current membership before servicing signed gateway requests.
+Disabling a group or removing membership revokes it without token refresh.
+
+Each document now stores the verified uploader's Keycloak subject. Group
+members can delete their **own** documents; group managers and system
+administrators can delete documents within the selected group. Previous
+documents with `created_by=NULL` can only be deleted by managers/admins.
+This avoids silently attributing legacy uploads to an arbitrary user.
+
+For first boot, set `DRUID_BOOTSTRAP_ADMIN_SUB` to the exact Keycloak `sub`
+of the initial system administrator, and stage `OIDC_SESSION_SECRET` and
+`INTERNAL_SECRET` as independent high-entropy secrets of at least 32
+characters. On the first authenticated request for that identity (only if no
+admin exists), the gateway provisions the first admin. Remove the bootstrap
+setting after successful bootstrap. Additional users and administrators
+are managed exclusively through REST, which checks the current system-admin
+DB row for each privileged operation.
+
+System administration and all Web UI mutations are available via
+`/v1/admin/*` and `/v1/*` behind the authenticated gateway. See
+`skills/druid-management/references/API.md`. The reusable AI skill at
+`skills/druid-management/SKILL.md` includes a helper CLI. For unattended
+agents, provision a dedicated Keycloak service-account identity and grant
+only the required DRUID permissions; do not place a browser user's refresh
+token or client secret in the skill.
+
+Web UI and gateway ports bind to localhost; the example Nginx TLS
+configuration routes `/` to the UI and `/v1/*` and `/mcp` to the
+gateway. The MCP backend has **no published port**, and in Keycloak mode
+verifies the gateway's signed, DB-derived identity instead of accepting
+roles directly from the Keycloak JWT.
+
+**Still required for production acceptance:** configure the real Keycloak
+realm/client/audience, test real signed OIDC browser login and service-account
+API access, exercise membership revocation under load, run migration and
+reindex older vectors against a backup, and perform a backup/restore drill.
+CI uses SQLite for the membership contract and mocked network/JWKS for OIDC;
+it is not a live Keycloak or H200 integration test.
+
 ## CI and local testing
 
 Run the regression suite (does not require GPU/model weights):
