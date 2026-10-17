@@ -64,6 +64,7 @@ def get_session(
 async def get_trusted_context(
     request: Request,
     settings: DocumentApiSettings = Depends(get_settings),
+    session: Session = Depends(get_session),
 ) -> RequestContext:
     """Build the trusted context from gateway-signed headers or fail closed.
 
@@ -71,7 +72,19 @@ async def get_trusted_context(
     is no body/query-param fallback — a request without valid headers is a
     401, never an anonymous or default-tenant request.
     """
-    return await trusted_context_from_request(request, settings.internal_secret)
+    context = await trusted_context_from_request(request, settings.internal_secret)
+    if settings.druid_auth_mode == "keycloak":
+        try:
+            actor = resolve(
+                session, context.user_id,
+                None if context.group_id == "__system__" else context.group_id,
+            )
+        except IdentityDenied as exc:
+            raise AuthorizationError("membership revoked or account disabled") from exc
+        if (actor.group_id != context.group_id or
+                set(actor.roles) != set(context.roles)):
+            raise AuthorizationError("group permissions changed; retry")
+    return context
 
 
 def get_repository(
@@ -79,15 +92,6 @@ def get_repository(
     context: RequestContext = Depends(get_trusted_context),
     settings: DocumentApiSettings = Depends(get_settings),
 ) -> CatalogRepository:
-    if settings.druid_auth_mode == "keycloak":
-        try:
-            actor = resolve(session, context.user_id,
-                            None if context.group_id == "__system__" else context.group_id)
-        except IdentityDenied as exc:
-            raise AuthorizationError("membership revoked or user disabled") from exc
-        if (actor.group_id != context.group_id or
-                set(actor.roles) != set(context.roles)):
-            raise AuthorizationError("group access changed; refresh request")
     return CatalogRepository(session, context)
 
 
