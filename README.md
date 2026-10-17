@@ -82,6 +82,33 @@ own uploaded documents; group managers may manage group documents.
 > and authenticated API gateway. `cora` is no longer required.
 > See `docs/runbook.md` and `DRUID_HARDENING.md` before any rollout.
 
+## AI skills for natural-language DRUID interaction
+
+- [`skills/druid-natural-language/SKILL.md`](skills/druid-natural-language/SKILL.md) — load this when someone asks an AI in ordinary language to search DRUID, answer questions with document citations, upload a PDF, check ingestion, review a page, delete an owned document, or work in multiple groups. Includes accurate intent routing, the gateway API contract, scenario examples, and a safe standard-library client in `scripts/druid_user.py`.
+- [`skills/druid-management/SKILL.md`](skills/druid-management/SKILL.md) — privileged companion for DRUID system-administrator REST actions: users, internal groups, memberships, quotas and document oversight.
+- [`skills/druid-sage/SKILL.md`](skills/druid-sage/SKILL.md) — usage guide and project disambiguation for DRUID versus New_sage.
+
+The AI needs an **authorized Keycloak bearer token and a real HTTPS DRUID
+gateway connection**; installing a skill alone does not create a remote
+connector or silently grant access. The user skill uses DRUID groups from
+PostgreSQL and selects them per request, never Keycloak group claims.
+Use documented APIs through the gateway, not internal service ports.
+
+`DRUID_API_BASE` is an HTTPS origin and `DRUID_ACCESS_TOKEN` is a
+short-lived access token supplied to the agent runtime by its approved
+identity integration. Example user operations from a connected shell:
+
+```bash
+python skills/druid-natural-language/scripts/druid_user.py me
+python skills/druid-natural-language/scripts/druid_user.py --group engineering search "What is our backup schedule?"
+python skills/druid-natural-language/scripts/druid_user.py --group engineering upload ./handbook.pdf
+python skills/druid-natural-language/scripts/druid_user.py --group engineering docs
+```
+
+All write operations remain subject to DRUID's API permissions and any
+required human confirmation. The skill and examples are *not* a
+deployed service; a live Keycloak/H200 integration test remains pending.
+
 ## MCP tools
 
 | Tool | What it does | Role |
