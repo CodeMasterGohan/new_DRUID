@@ -77,7 +77,7 @@ def page_context(request: Request, identity: Identity, **extra):
     return {
         "request": request,
         "identity": identity,
-        "is_admin": identity.is_admin,
+        "is_admin": identity.is_admin or getattr(request.state, "system_admin", False),
         "can_review": identity.can_review,
         "nav_active": _nav_section(request.url.path),
         "notice": NOTICES.get(request.query_params.get("notice", "")),
