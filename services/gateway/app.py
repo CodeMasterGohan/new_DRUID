@@ -144,6 +144,8 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
                 "Keycloak mode requires RS256, JWT_ISSUER, JWT_AUDIENCE, "
                 "JWKS_URL and DATABASE_URL"
             )
+        if (not settings.internal_secret or len(settings.internal_secret) < 32):
+            raise RuntimeError("Keycloak gateway mode requires a strong INTERNAL_SECRET")
         identity_sessions = sessionmaker(
             bind=create_engine(settings.database_url, pool_pre_ping=True),
             expire_on_commit=False,
