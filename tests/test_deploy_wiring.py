@@ -396,7 +396,7 @@ def test_only_allowlisted_services_publish_host_ports():
     publish; everything else is container-to-container on the compose/cora
     networks."""
     allowed = {
-        "druid-cpu": {"web_ui", "mcp_server"},
+        "druid-cpu": {"web_ui", "gateway"},
         "druid-gpu": set(),
         "sage": {"mcp-server"},
     }
