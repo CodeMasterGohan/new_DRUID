@@ -74,4 +74,4 @@ jobs:
         env:
           PYTHONPATH: .:services/document_api
         run: |
-          python -m pytest -q services/catalog/tests/test_identity.py services/document_api/tests/test_identity_admin.py services/gateway/tests/test_internal_groups.py
+          python -m pytest -q services/catalog/tests/test_identity.py services/document_api/tests/test_identity_admin.py services/document_api/tests/test_document_ownership.py services/gateway/tests/test_internal_groups.py
