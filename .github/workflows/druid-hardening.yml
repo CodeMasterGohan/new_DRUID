@@ -58,3 +58,19 @@ jobs:
       - name: Test login redirects, cookies and tenant UI isolation
         working-directory: services/web_ui
         run: python -m pytest -q tests
+  identity-management-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install identity and API dependencies
+        run: |
+          python -m pip install -r services/document_api/requirements.txt
+          python -m pip check
+      - name: Exercise internal groups and REST administration
+        env:
+          PYTHONPATH: .:services/document_api
+        run: |
+          python -m pytest -q services/catalog/tests/test_identity.py services/document_api/tests/test_identity_admin.py
