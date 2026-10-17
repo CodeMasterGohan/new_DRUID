@@ -51,6 +51,10 @@ def _safe_next(target: str) -> str:
 @router.get("/login")
 def login_form(request: Request, next: str = "/documents"):
     next = _safe_next(next)
+    if request.app.state.web_ui_settings.druid_auth_mode == "keycloak":
+        from urllib.parse import quote
+        return RedirectResponse(url="/auth/oidc/start?next=" + quote(next, safe=""),
+                                status_code=303)
     try:
         current_identity(request)
         return RedirectResponse(url=next, status_code=303)
@@ -67,7 +71,10 @@ def login_submit(
     token: str = Form(...),
     next: str = Form(default="/documents"),
 ):
-    """Validate the pasted token and establish the session cookie."""
+    """Legacy paste-token mode only. Keycloak requires proper OIDC callback."""
+    if request.app.state.web_ui_settings.druid_auth_mode == "keycloak":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="token-paste login disabled")
     next = _safe_next(next)
     token = (token or "").strip()
     try:
