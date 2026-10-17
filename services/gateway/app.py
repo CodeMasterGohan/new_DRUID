@@ -22,6 +22,7 @@ import os
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from services.catalog.identity import IdentityDenied, resolve, provision_first_admin
@@ -66,7 +67,7 @@ class GatewaySettings(BaseSettings):
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
     jwks_url: str | None = None
-    auth_mode: str = "legacy"  # set DRUID_AUTH_MODE=keycloak for production
+    auth_mode: str = Field("legacy", validation_alias="DRUID_AUTH_MODE")
     database_url: str | None = None
     druid_bootstrap_admin_sub: str = ""
 
