@@ -68,14 +68,18 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d
 docker compose --env-file .env -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
 ```
 
-Then open **http://localhost:8005**, paste an operator-provisioned JWT on the
-login page, and upload a document. The review queue catches pages the router
-couldn't resolve on its own; an admin sees cross-tenant documents, jobs, and
-quotas.
+After configuring Keycloak and HTTPS (see below), open the DRUID HTTPS
+hostname. The login page redirects to Keycloak using Authorization Code + PKCE.
+**Token-paste login is disabled in production.** DRUID group membership and
+roles live in PostgreSQL and are managed with the Groups page or REST API,
+not in Keycloak. A user can belong to multiple groups; the selected group
+scopes uploads, searches, review and deletion. Members may remove only their
+own uploaded documents; group managers may manage group documents.
 
-> **First boot needs three things:** model weights staged per
-> `services/artifacts/manifests/` (`MODEL_DIR`, read-only), both
-> `cora` and `druid-net` networks, and live Postgres/Redis/RustFS/Milvus.
+> **First boot:** stage model artifacts and initialize the `druid-net`
+> GPU network. Backend and MCP containers are private; externally exposed
+> browsers and AI clients use the HTTPS reverse proxy in front of the UI
+> and authenticated API gateway. `cora` is no longer required.
 > See `docs/runbook.md` and `DRUID_HARDENING.md` before any rollout.
 
 ## MCP tools
@@ -93,8 +97,8 @@ quotas.
 ```jsonc
 // Claude Code / MCP client config (Streamable HTTP)
 { "mcpServers": { "druid": {
-  "url": "http://<h200>:8002/mcp",
-  "headers": { "Authorization": "Bearer <operator-provisioned JWT>" }
+  "url": "https://druid.example.invalid/mcp",
+  "headers": { "Authorization": "Bearer <Keycloak access JWT>" }
 }}}
 // …or local trusted stdio:
 // python -m mcp_server.stdio_adapter --user-id you --group-id your-tenant --roles admin,reviewer
@@ -107,7 +111,8 @@ quotas.
 | Documents | `POST /v1/documents/register` → `POST /v1/documents/{id}/bytes` (ticketed upload), `GET /v1/documents`, `GET /v1/documents/{id}`, `DELETE /v1/documents/{id}` |
 | Review | `GET /v1/review/items`, `GET …/{item_id}`, `POST …/{item_id}/resolve` |
 | Jobs | `GET /v1/jobs/{job_id}` |
-| Admin (`admin` role) | `GET /v1/admin/documents`, `GET /v1/admin/jobs`, `GET /v1/admin/quotas` |
+| System admin | `GET/POST/PATCH /v1/admin/users`, `GET/POST/PATCH /v1/admin/groups`, `PUT/DELETE /v1/admin/groups/{group}/members/{subject}`, `GET /v1/admin/documents`, `GET /v1/admin/jobs`, `GET /v1/admin/quotas` |
+| Group context | `GET /v1/identity/me`, request header `X-Group-Selection: engineering` (verified against database membership) |
 
 Two-phase upload exists so large files can be chunked/resumable (the web UI
 splits in the browser); single-shot multipart upload also works.
