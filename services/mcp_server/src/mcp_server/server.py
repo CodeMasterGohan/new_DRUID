@@ -353,7 +353,7 @@ def create_app(
     """Build the Streamable HTTP MCP application."""
     settings = settings or Settings.from_env()
     if settings.gateway_internal_auth:
-        if not settings.internal_secret or settings.internal_secret == "change-me":
+        if not settings.internal_secret or len(settings.internal_secret) < 32:
             raise RuntimeError("MCP gateway mode requires a strong INTERNAL_SECRET")
     elif not settings.jwt_secret:
         raise RuntimeError("JWT_SECRET or JWT_PUBLIC_KEY_PEM is required")
