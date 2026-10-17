@@ -90,3 +90,77 @@ def test_druid_roles_are_not_taken_from_keycloak_claims(monkeypatch):
         assert response.json() == {
             "roles": ["user"], "group_id": "engineering",
         }
+
+
+
+def test_complete_oidc_callback_accepts_only_verified_keycloak_tokens(monkeypatch):
+    import json
+    import time
+    import httpx
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+    import auth
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private.public_key()))
+    public_jwk["kid"] = "test-rsa-key"
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return self.body
+
+    original_get = httpx.get
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: Response(
+        {"keys": [public_jwk]}
+    ))
+    auth._jwks_cache.clear()
+    monkeypatch.setattr(oidc_pages, "_metadata", _provider)
+    with TestClient(_app()) as client:
+        start = client.get("/auth/oidc/start", follow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+        data = jwt.decode(client.cookies.get("druid_oidc_flow"),
+                          client.app.state.web_ui_settings.oidc_session_secret,
+                          algorithms=["HS256"])
+        base = {"iss": "https://login.example.test/realms/druid", "sub": "subject-123",
+                "exp": int(time.time()) + 300, "iat": int(time.time())}
+        id_token = jwt.encode(
+            {**base, "aud": "druid-web", "nonce": data["nonce"]}, pem,
+            algorithm="RS256", headers={"kid": "test-rsa-key"},
+        )
+        access_token = jwt.encode(
+            {**base, "aud": "druid-api"}, pem,
+            algorithm="RS256", headers={"kid": "test-rsa-key"},
+        )
+
+        class TokenClient:
+            def __init__(self, *args, **kwargs):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *args):
+                pass
+            async def post(self, url, data):
+                assert data["code_verifier"] == jwt.decode(
+                    client.cookies.get("druid_oidc_flow"),
+                    client.app.state.web_ui_settings.oidc_session_secret,
+                    algorithms=["HS256"]
+                )["verifier"]
+                return Response({"id_token": id_token, "access_token": access_token,
+                                 "expires_in": 300})
+
+        monkeypatch.setattr(oidc_pages.httpx, "AsyncClient", TokenClient)
+        resp = client.get("/auth/oidc/callback?code=one-time&state=" + state,
+                          follow_redirects=False)
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/documents"
+        assert client.cookies.get("druid_at") == access_token
+        assert not client.cookies.get("druid_oidc_flow")
