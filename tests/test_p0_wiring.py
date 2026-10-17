@@ -46,5 +46,9 @@ def test_shared_backend_network_minimized():
     assert "druid-net" in compose["services"]["ingestion"]["networks"]
 
 
-def test_mcp_binds_locally_by_default():
-    assert "${MCP_BIND_IP:-127.0.0.1}" in _read("deploy/docker-compose.yml")
+def test_mcp_gateway_only_and_api_binds_locally_by_default():
+    import yaml
+    c = yaml.safe_load(_read("deploy/docker-compose.yml"))
+    assert "${API_BIND_IP:-127.0.0.1}" in _read("deploy/docker-compose.yml")
+    assert "ports" not in c["services"]["mcp_server"]
+    assert "cora" not in c["services"]["mcp_server"]["networks"]
