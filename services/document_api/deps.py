@@ -10,6 +10,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from services.catalog.repository import CatalogRepository
+from services.catalog.identity import IdentityDenied, resolve
+from services.catalog.errors import AuthorizationError
 from services.common.request_context import RequestContext
 
 from internal_auth import trusted_context_from_request
@@ -75,7 +77,17 @@ async def get_trusted_context(
 def get_repository(
     session: Session = Depends(get_session),
     context: RequestContext = Depends(get_trusted_context),
+    settings: DocumentApiSettings = Depends(get_settings),
 ) -> CatalogRepository:
+    if settings.druid_auth_mode == "keycloak":
+        try:
+            actor = resolve(session, context.user_id,
+                            None if context.group_id == "__system__" else context.group_id)
+        except IdentityDenied as exc:
+            raise AuthorizationError("membership revoked or user disabled") from exc
+        if (actor.group_id != context.group_id or
+                set(actor.roles) != set(context.roles)):
+            raise AuthorizationError("group access changed; refresh request")
     return CatalogRepository(session, context)
 
 
