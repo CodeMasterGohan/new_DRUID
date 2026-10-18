@@ -1,0 +1,356 @@
+# New_DRUID — GitLab CI/CD (adapt runner tags and deployment variables)
+# Build: isolated, privileged DinD runner only. Deploy: manual SSH to a
+# pre-provisioned host; real .env/secrets/model weights never enter GitLab.
+# Docs: .gitlab/README.md
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+stages: [validate, test, security, rust, build, package, deploy, verify]
+
+default:
+  interruptible: true
+
+variables:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  DOCKER_BUILDKIT: "1"
+
+lint-python:
+  stage: validate
+  image: python:3.11-slim
+  script:
+    - python -m pip install ruff==0.9.10
+    - ruff check services tests --output-format json > ruff-report.json
+  artifacts:
+    when: always
+    paths: [ruff-report.json]
+    expire_in: 7 days
+  # Existing codebase lint debt is visible without blocking this first CI rollout.
+  allow_failure: true
+
+validate-shell-and-yaml:
+  stage: validate
+  image: python:3.11-slim
+  script:
+    - python -m pip install PyYAML==6.0.2
+    - python -c "import yaml; [yaml.safe_load(open(p)) for p in ['.gitlab-ci.yml','.gitlab/images.compose.yml','deploy/docker-compose.yml','deploy/docker-compose.gpu.yml']]"
+    - sh -n .gitlab/scripts/ssh-deploy.sh
+    - sh -n .gitlab/scripts/remote-deploy.sh
+    - python -m compileall -q services tests
+  rules:
+    - when: on_success
+
+validate-compose:
+  stage: validate
+  image: docker:27.5.1-cli
+  script:
+    - cp .env.example .env
+    - docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
+    - docker compose --env-file .env -f deploy/docker-compose.gpu.yml config --quiet
+    - CI_IMAGE_PREFIX=registry.example.invalid/project CI_IMAGE_TAG=0123456789abcdef docker compose --env-file .env -f deploy/docker-compose.yml -f .gitlab/images.compose.yml config --quiet
+  rules:
+    - when: on_success
+
+test-retrieval-and-deployment:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - python -m pip install pytest==8.3.5 fastapi==0.115.8 httpx==0.28.1 sqlalchemy==2.0.38 psycopg[binary]==3.2.9 pydantic==2.11.7 pydantic-settings==2.7.1 PyYAML==6.0.2
+    - python -m pytest -q services/retrieval/tests tests/test_p0_wiring.py tests/test_deploy_wiring.py tests/test_druid_natural_language_skill.py --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+    paths: [junit.xml]
+    expire_in: 14 days
+
+test-keycloak-and-admin:
+  stage: test
+  image: python:3.11-slim
+  variables:
+    PYTHONPATH: ".:services/document_api"
+  script:
+    - python -m pip install -r services/document_api/requirements.txt PyJWT==2.10.1
+    - python -m pytest -q services/catalog/tests/test_identity.py services/document_api/tests/test_identity_admin.py services/document_api/tests/test_document_ownership.py services/gateway/tests/test_internal_groups.py --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+
+test-mcp:
+  stage: test
+  image: python:3.11-slim
+  variables:
+    PYTHONPATH: ".:services/mcp_server/src"
+  script:
+    - python -m pip install -r services/mcp_server/requirements.txt
+    - python -m pytest -q services/mcp_server/tests --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: junit.xml
+
+test-web-ui:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - python -m pip install -r services/web_ui/requirements.txt
+    - cd services/web_ui
+    - python -m pytest -q tests --junitxml=junit.xml
+  artifacts:
+    when: always
+    reports:
+      junit: services/web_ui/junit.xml
+
+# These checks are initially advisory until existing findings are triaged.
+# Promote allow_failure=false when the baseline is accepted.
+dependency-audit:
+  stage: security
+  image: python:3.11-slim
+  script:
+    - python -m pip install pip-audit==2.7.3
+    - |
+      result=0
+      for req in services/*/requirements.txt; do
+        echo "Auditing $req"
+        python -m pip_audit -r "$req" --disable-pip --no-deps || result=1
+      done
+      exit "$result"
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+secret-detection:
+  stage: security
+  image:
+    name: zricethezav/gitleaks:v8.21.2
+    entrypoint: [""]
+  script:
+    - gitleaks dir . --no-banner --redact --report-format json --report-path gitleaks-report.json
+  artifacts:
+    when: always
+    paths: [gitleaks-report.json]
+    expire_in: 7 days
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+source-security-scan:
+  stage: security
+  image:
+    name: aquasec/trivy:0.58.2
+    entrypoint: [""]
+  script:
+    - trivy fs --scanners vuln,secret,misconfig --format json --output trivy-source.json --exit-code 0 .
+  artifacts:
+    when: always
+    paths: [trivy-source.json]
+    expire_in: 7 days
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+.docker-build:
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  tags: [docker-privileged]  # CHANGE: dedicated isolated privileged runner tag
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - docker info
+  interruptible: true
+
+build-images:
+  extends: .docker-build
+  stage: build
+  parallel:
+    matrix:
+      - SERVICE: [catalog, milvus_setup, gateway, document_api, mcp_server, web_ui, embedding, retrieval, ingestion]
+  script:
+    - docker build --pull --file "services/$SERVICE/Dockerfile" --tag "$CI_REGISTRY_IMAGE/$SERVICE:$CI_COMMIT_SHA" .
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ] || [ "${CI_COMMIT_BRANCH:-}" = "$CI_DEFAULT_BRANCH" ]; then
+        echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+        docker push "$CI_REGISTRY_IMAGE/$SERVICE:$CI_COMMIT_SHA"
+      else
+        echo "MR/manual build only: no registry push"
+      fi
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: manual
+      allow_failure: true
+
+release-manifest:
+  stage: package
+  image: alpine:3.21
+  script:
+    - |
+      printf 'PROJECT=%s\nCOMMIT=%s\nREF=%s\nREGISTRY_IMAGE=%s\n'         "$CI_PROJECT_PATH" "$CI_COMMIT_SHA" "$CI_COMMIT_REF_NAME" "$CI_REGISTRY_IMAGE" > release-manifest.txt
+      sha256sum .gitlab-ci.yml .gitlab/images.compose.yml deploy/docker-compose.yml >> release-manifest.txt
+  artifacts:
+    paths: [release-manifest.txt]
+    expire_in: 90 days
+  rules:
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+.ssh-deploy:
+  stage: deploy
+  image: alpine:3.21
+  before_script:
+    - apk add --no-cache openssh-client
+  interruptible: false
+  dependencies: []
+
+migrate-staging:
+  extends: .ssh-deploy
+  environment:
+    name: staging
+  resource_group: druid-staging
+  script:
+    - ': "${STAGING_DEPLOY_HOST:?Set STAGING_DEPLOY_HOST}"'
+    - ': "${STAGING_DEPLOY_USER:?Set STAGING_DEPLOY_USER}"'
+    - ': "${STAGING_DEPLOY_PATH:?Set STAGING_DEPLOY_PATH}"'
+    - sh .gitlab/scripts/ssh-deploy.sh "druid" "$STAGING_DEPLOY_HOST" "$STAGING_DEPLOY_USER" "$STAGING_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" migrate
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: true
+
+deploy-staging:
+  extends: .ssh-deploy
+  environment:
+    name: staging
+  resource_group: druid-staging
+  script:
+    - ': "${STAGING_DEPLOY_HOST:?Set STAGING_DEPLOY_HOST}"'
+    - ': "${STAGING_DEPLOY_USER:?Set STAGING_DEPLOY_USER}"'
+    - ': "${STAGING_DEPLOY_PATH:?Set STAGING_DEPLOY_PATH}"'
+    - sh .gitlab/scripts/ssh-deploy.sh "druid" "$STAGING_DEPLOY_HOST" "$STAGING_DEPLOY_USER" "$STAGING_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: true
+
+rollback-staging:
+  extends: .ssh-deploy
+  environment:
+    name: staging
+  resource_group: druid-staging
+  script:
+    - ': "${STAGING_DEPLOY_HOST:?Set STAGING_DEPLOY_HOST}"'
+    - ': "${STAGING_DEPLOY_USER:?Set STAGING_DEPLOY_USER}"'
+    - ': "${STAGING_DEPLOY_PATH:?Set STAGING_DEPLOY_PATH}"'
+    - echo "Image rollback only; no automatic database/schema downgrade."
+    - sh .gitlab/scripts/ssh-deploy.sh "druid" "$STAGING_DEPLOY_HOST" "$STAGING_DEPLOY_USER" "$STAGING_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" rollback
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: true
+
+migrate-production:
+  extends: .ssh-deploy
+  environment:
+    name: production
+  resource_group: druid-production
+  script:
+    - ': "${PRODUCTION_DEPLOY_HOST:?Set PRODUCTION_DEPLOY_HOST}"'
+    - ': "${PRODUCTION_DEPLOY_USER:?Set PRODUCTION_DEPLOY_USER}"'
+    - ': "${PRODUCTION_DEPLOY_PATH:?Set PRODUCTION_DEPLOY_PATH}"'
+    - test "${PRODUCTION_BACKUP_CONFIRMED:-}" = "YES" || { echo "Set PRODUCTION_BACKUP_CONFIRMED=YES after verifying backup and restore plan"; exit 1; }
+    - sh .gitlab/scripts/ssh-deploy.sh "druid" "$PRODUCTION_DEPLOY_HOST" "$PRODUCTION_DEPLOY_USER" "$PRODUCTION_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" migrate
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+      allow_failure: true
+
+deploy-production:
+  extends: .ssh-deploy
+  environment:
+    name: production
+  resource_group: druid-production
+  script:
+    - ': "${PRODUCTION_DEPLOY_HOST:?Set PRODUCTION_DEPLOY_HOST}"'
+    - ': "${PRODUCTION_DEPLOY_USER:?Set PRODUCTION_DEPLOY_USER}"'
+    - ': "${PRODUCTION_DEPLOY_PATH:?Set PRODUCTION_DEPLOY_PATH}"'
+    - sh .gitlab/scripts/ssh-deploy.sh "druid" "$PRODUCTION_DEPLOY_HOST" "$PRODUCTION_DEPLOY_USER" "$PRODUCTION_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" deploy
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+      allow_failure: true
+
+rollback-production:
+  extends: .ssh-deploy
+  environment:
+    name: production
+  resource_group: druid-production
+  script:
+    - ': "${PRODUCTION_DEPLOY_HOST:?Set PRODUCTION_DEPLOY_HOST}"'
+    - ': "${PRODUCTION_DEPLOY_USER:?Set PRODUCTION_DEPLOY_USER}"'
+    - ': "${PRODUCTION_DEPLOY_PATH:?Set PRODUCTION_DEPLOY_PATH}"'
+    - echo "Image rollback only; no automatic database/schema downgrade."
+    - sh .gitlab/scripts/ssh-deploy.sh "druid" "$PRODUCTION_DEPLOY_HOST" "$PRODUCTION_DEPLOY_USER" "$PRODUCTION_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" rollback
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+      allow_failure: true
+
+smoke-staging:
+  stage: verify
+  image: curlimages/curl:8.11.1
+  script:
+    - test -n "${STAGING_HEALTHCHECK_URL:-}" || { echo "Set STAGING_HEALTHCHECK_URL to a private reachable /health endpoint"; exit 1; }
+    - curl --fail --show-error --silent --max-time 30 --retry 3 "$STAGING_HEALTHCHECK_URL"
+  environment:
+    name: staging
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: true
+
+smoke-production:
+  stage: verify
+  image: curlimages/curl:8.11.1
+  script:
+    - test -n "${PRODUCTION_HEALTHCHECK_URL:-}" || { echo "Set PRODUCTION_HEALTHCHECK_URL to a private reachable /health endpoint"; exit 1; }
+    - curl --fail --show-error --silent --max-time 30 --retry 3 "$PRODUCTION_HEALTHCHECK_URL"
+  environment:
+    name: production
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+      allow_failure: true
+
+gpu-start-production:
+  extends: .ssh-deploy
+  environment:
+    name: production
+  resource_group: druid-production
+  script:
+    - ': "${PRODUCTION_DEPLOY_HOST:?Set PRODUCTION_DEPLOY_HOST}"'
+    - ': "${PRODUCTION_DEPLOY_USER:?Set PRODUCTION_DEPLOY_USER}"'
+    - ': "${PRODUCTION_DEPLOY_PATH:?Set PRODUCTION_DEPLOY_PATH}"'
+    - sh .gitlab/scripts/ssh-deploy.sh druid "$PRODUCTION_DEPLOY_HOST" "$PRODUCTION_DEPLOY_USER" "$PRODUCTION_DEPLOY_PATH" "$CI_REGISTRY_IMAGE" "$CI_COMMIT_SHA" gpu-up
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: manual
+      allow_failure: true
