@@ -175,3 +175,31 @@ for the real instance's CI Lint validator.
   does not package proprietary or heavy model weights.
 - DRUID's unsuccessful Rust RRF/postprocessing experiment has been
   removed. This pipeline deliberately **does not build Rust for DRUID**.
+
+
+## Recovery after an interrupted deployment
+
+The remote release helper uses immutable 40-character Git commit-SHA image
+tags. Before a migration, it explicitly **pulls the catalog and Milvus
+setup images** from the registry and runs them with `--no-build`.
+Deployment waits for Compose services to report running/healthy, with a
+default timeout of **600 seconds**. On the deployment host, you may set
+`COMPOSE_DEPLOY_WAIT_TIMEOUT` to a larger number for model-heavy startup.
+
+Release state is updated **only after** a successful deployment. While an
+attempt is running, `.gitlab/deploy-attempt-image-tag` records the target.
+If a deployment partially replaces containers and then fails, the manual
+`rollback-*` job restores the last **known-good current image tag**. If
+there is no failed-attempt marker, it restores the ordinary previous image
+tag. The marker is removed after successful deployment or recovery.
+
+**This rollback only switches application images.** It never rolls back
+PostgreSQL, Alembic, Milvus, RustFS, documents, or external model weights.
+Check schema compatibility before triggering an image rollback; restore
+persistent data separately from tested backups if necessary.
+
+The repository's GitHub Actions jobs validate the GitLab YAML structure,
+shell syntax, and Docker Compose interpolation. They do **not** execute a
+GitLab runner, provision SSH keys or validate the configuration against your
+exact GitLab server. Run **CI/CD → Editor → Validate** in your GitLab
+instance after importing or mirroring the project.
