@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from .models import FusedCandidate, ScoredHit
 
 
@@ -17,28 +15,6 @@ def reciprocal_rank_fusion(
     ranked hits. Candidates are deduplicated by ``chunk_id``; ranks are the
     1-based positions inside each branch list.
     """
-    # The optional compiled extension accelerates only post-filter score
-    # arithmetic. The catalog's authorization predicate is enforced before
-    # either implementation receives hits; no Rust code handles tenancy.
-    if os.getenv("DRUID_RUST_FASTPATH", "0") == "1":
-        from druid_retrieval_fastpath import rrf
-
-        packed = [
-            (name, [(hit.record.chunk_id, hit.rank or 0) for hit in hits])
-            for name, hits in branches.items()
-        ]
-        first: dict[str, ScoredHit] = {}
-        for hits in branches.values():
-            for hit in hits:
-                first.setdefault(hit.record.chunk_id, hit)
-        return [
-            FusedCandidate(
-                record=first[key].record, fusion_score=score,
-                branches=tuple(contributors),
-            )
-            for key, score, contributors in rrf(packed, k)
-        ]
-
     scores: dict[str, float] = {}
     records: dict[str, ScoredHit] = {}
     contributors: dict[str, set[str]] = {}
