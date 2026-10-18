@@ -188,6 +188,20 @@ All tunables live in `.env.example` (copy to `.env`). The highlights:
 | `MODEL_DIR` | `/models` | Host artifact registry, mounted read-only |
 | `MAX_UPLOAD_MB` / `MAX_PAGES_PER_DOCUMENT` | `200` / `2000` | Upload guards |
 
+## GitLab CI/CD
+
+The checked-in [`.gitlab-ci.yml`](.gitlab-ci.yml) covers contracts,
+GitLab runner validation, advisory source/dependency/secret/security scans,
+Docker image builds and registry publishing, immutable release manifests,
+manual staging/production migrations and deployments, rollback, optional
+per-image vulnerability and CycloneDX SBOM reports, and private smoke tests.
+See [`.gitlab/README.md`](.gitlab/README.md) for **environment-specific
+CI variables**, runner/SSH/registry requirements, and the explicit release
+approval sequence. Nothing deploys until the GitLab project is configured
+and a human starts its manual jobs. This repository's GitHub Actions only
+validate the GitLab YAML/Compose contract; production GitLab CI lint must
+still run against the actual GitLab instance.
+
 ## Testing
 
 ```bash
