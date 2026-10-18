@@ -181,7 +181,8 @@ for the real instance's CI Lint validator.
 
 The remote release helper uses immutable 40-character Git commit-SHA image
 tags. Before a migration, it explicitly **pulls the catalog and Milvus
-setup images** from the registry and runs them with `--no-build`.
+setup images** from the registry and runs them with `docker compose run --pull never`, which uses the
+already-pulled registry images without fetching a replacement.
 Deployment waits for Compose services to report running/healthy, with a
 default timeout of **600 seconds**. On the deployment host, you may set
 `COMPOSE_DEPLOY_WAIT_TIMEOUT` to a larger number for model-heavy startup.
