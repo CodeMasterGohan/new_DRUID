@@ -50,8 +50,8 @@ case "$operation" in
     # shellcheck disable=SC2086
     compose pull "$schema" milvus_setup
     compose up -d --no-build $infrastructure
-    compose run --rm --no-deps --no-build "$schema"
-    compose run --rm --no-deps --no-build milvus_setup
+    compose run --rm --no-deps --pull never "$schema"
+    compose run --rm --no-deps --pull never milvus_setup
     # Migration is approved for this exact set of prebuilt image versions.
     : > ".gitlab/migrations-approved-$tag"
     printf 'Migration/index setup passed for %s\n' "$tag"
