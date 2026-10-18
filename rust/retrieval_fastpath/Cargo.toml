@@ -1,0 +1,17 @@
+[package]
+name = "druid-retrieval-fastpath"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Optional Python-compatible CPU post-processing fast path for DRUID retrieval"
+
+[lib]
+name = "druid_retrieval_fastpath"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23.5", features = ["extension-module"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
