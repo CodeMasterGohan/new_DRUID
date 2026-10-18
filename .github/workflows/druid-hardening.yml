@@ -75,3 +75,39 @@ jobs:
           PYTHONPATH: .:services/document_api
         run: |
           python -m pytest -q services/catalog/tests/test_identity.py services/document_api/tests/test_identity_admin.py services/document_api/tests/test_document_ownership.py services/gateway/tests/test_internal_groups.py
+
+  gitlab-ci-manifest-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate GitLab YAML and deployment script structure
+        run: |
+          python -m pip install PyYAML==6.0.2
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          pipeline = yaml.safe_load(Path(".gitlab-ci.yml").read_text())
+          overlay = yaml.safe_load(Path(".gitlab/images.compose.yml").read_text())
+          assert pipeline["workflow"]["rules"]
+          assert "build-images" in pipeline
+          assert "deploy-staging" in pipeline
+          assert "deploy-production" in pipeline
+          assert "migrate-staging" in pipeline
+          assert "migrate-production" in pipeline
+          assert "rollback-production" in pipeline
+          assert pipeline["build-images"]["parallel"]["matrix"]
+          assert overlay["services"]
+          assert "secret-detection" in pipeline
+          for key in ("DEPLOY_SSH_KEY_FILE", "DEPLOY_KNOWN_HOSTS_FILE"):
+              assert key in Path(".gitlab/scripts/ssh-deploy.sh").read_text()
+          PY
+          sh -n .gitlab/scripts/ssh-deploy.sh
+          sh -n .gitlab/scripts/remote-deploy.sh
+      - name: Validate image overlay with current Compose files
+        run: |
+          cp .env.example .env
+          CI_IMAGE_PREFIX=registry.example.invalid/org/project CI_IMAGE_TAG=abcdef123456 docker compose --env-file .env -f deploy/docker-compose.yml -f .gitlab/images.compose.yml config --quiet
+
