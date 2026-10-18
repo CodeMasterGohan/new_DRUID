@@ -75,3 +75,24 @@ jobs:
           PYTHONPATH: .:services/document_api
         run: |
           python -m pytest -q services/catalog/tests/test_identity.py services/document_api/tests/test_identity_admin.py services/document_api/tests/test_document_ownership.py services/gateway/tests/test_internal_groups.py
+
+  rust-retrieval-fastpath:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust wheel builder and test dependencies
+        run: |
+          python -m pip install "maturin>=1.7,<2" pytest==8.3.5             fastapi==0.115.8 httpx==0.28.1 sqlalchemy==2.0.38             psycopg[binary]==3.2.9 pydantic==2.11.7 pydantic-settings==2.7.1
+      - name: Build native PyO3 wheel from source
+        run: |
+          maturin build --release --interpreter python --manifest-path rust/retrieval_fastpath/Cargo.toml --out /tmp/druid-wheels
+          python -m pip install /tmp/druid-wheels/*.whl
+      - name: Verify Rust and Python output parity and benchmark
+        env:
+          DRUID_RUST_FASTPATH: "1"
+        run: |
+          python -m pytest -q -s tests/test_rust_retrieval_fastpath.py
