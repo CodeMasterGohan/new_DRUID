@@ -74,6 +74,8 @@ case "$operation" in
     # Prevent Compose from auto-starting one-shot schema services.
     # Record the previous version ONLY after the new services start healthy.
     # shellcheck disable=SC2086
+    printf '%s\n' "$tag" > .gitlab/deploy-attempt-image-tag.tmp
+    mv .gitlab/deploy-attempt-image-tag.tmp .gitlab/deploy-attempt-image-tag
     compose up -d --no-build --no-deps --wait --wait-timeout "${COMPOSE_DEPLOY_WAIT_TIMEOUT:-600}" $running
     if test -n "$old" && test "$old" != "$tag"; then
       printf '%s\n' "$old" > .gitlab/previous-image-tag.tmp
@@ -81,14 +83,27 @@ case "$operation" in
     fi
     printf '%s\n' "$tag" > .gitlab/current-image-tag.tmp
     mv .gitlab/current-image-tag.tmp .gitlab/current-image-tag
+    rm -f .gitlab/deploy-attempt-image-tag
     compose ps
     ;;
   rollback)
-    test -f .gitlab/previous-image-tag || {
-      echo "No prior image SHA available for rollback" >&2; exit 4
-    }
-    previous=$(cat .gitlab/previous-image-tag)
+    recovering=0
+    if test -f .gitlab/deploy-attempt-image-tag; then
+      # A failed partial deploy may have replaced only some containers.
+      # The last KNOWN-GOOD version is current-image-tag, not previous-image-tag.
+      test -s .gitlab/current-image-tag || {
+        echo "Failed first release requires manual recovery; no prior known-good version" >&2; exit 4
+      }
+      recovering=1
+      previous=$(cat .gitlab/current-image-tag)
+    else
+      test -f .gitlab/previous-image-tag || {
+        echo "No prior image SHA available for rollback" >&2; exit 4
+      }
+      previous=$(cat .gitlab/previous-image-tag)
+    fi
     case "$previous" in *[!a-fA-F0-9]*|"") echo "Invalid previous tag" >&2; exit 4;; esac
+    [ "${#previous}" -eq 40 ] || exit 4
     current=$(cat .gitlab/current-image-tag || true)
     export CI_IMAGE_TAG="$previous"
     # Image-only rollback: this does NOT revert database migrations/schema.
@@ -100,10 +115,11 @@ case "$operation" in
     compose up -d --no-build --no-deps --wait --wait-timeout "${COMPOSE_DEPLOY_WAIT_TIMEOUT:-600}" $running
     printf '%s\n' "$previous" > .gitlab/current-image-tag.tmp
     mv .gitlab/current-image-tag.tmp .gitlab/current-image-tag
-    if test -n "$current"; then
+    if test "$recovering" -ne 1 && test -n "$current"; then
       printf '%s\n' "$current" > .gitlab/previous-image-tag.tmp
       mv .gitlab/previous-image-tag.tmp .gitlab/previous-image-tag
     fi
+    rm -f .gitlab/deploy-attempt-image-tag
     compose ps
     ;;
   status)
