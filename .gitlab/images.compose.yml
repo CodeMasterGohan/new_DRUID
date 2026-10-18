@@ -1,0 +1,23 @@
+# GitLab CI overlay: pre-built, immutable images only.
+# Never set CI_IMAGE_PREFIX or CI_IMAGE_TAG from an untrusted document.
+# All services still use the original Compose volumes, networks, ports,
+# env_file, and model mounts. Compose deploys use --no-build.
+services:
+  catalog:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/catalog:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  milvus_setup:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/milvus_setup:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  gateway:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/gateway:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  document_api:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/document_api:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  mcp_server:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/mcp_server:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  web_ui:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/web_ui:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  embedding:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/embedding:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  retrieval:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/retrieval:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}
+  ingestion:
+    image: ${CI_IMAGE_PREFIX:?Set CI_IMAGE_PREFIX}/ingestion:${CI_IMAGE_TAG:?Set CI_IMAGE_TAG}

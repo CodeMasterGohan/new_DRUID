@@ -23,7 +23,7 @@ from settings import WebUISettings
 from upload_sessions import UploadSessionStore
 
 import routes as route_helpers
-from routes import auth_pages, pages, partials
+from routes import auth_pages, pages, partials, oidc_pages, group_pages
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -101,6 +101,8 @@ def create_app(
         return RedirectResponse(url="/login", status_code=303)
 
     app.include_router(auth_pages.router)
+    app.include_router(oidc_pages.router)
+    app.include_router(group_pages.router)
     app.include_router(pages.router)
     app.include_router(partials.router)
 

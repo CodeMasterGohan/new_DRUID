@@ -103,7 +103,7 @@ def _get_key(token: str, settings: JWTSettings):
     return key
 
 
-def validate_token(raw_token: str, settings: JWTSettings) -> dict:
+def validate_token(raw_token: str, settings: JWTSettings, *, require_group: bool = True) -> dict:
     """Validate a bearer token and return the trusted identity claims.
 
     Returns ``{"user_id", "group_id", "roles"}``. Raises :class:`AuthError`
@@ -139,7 +139,7 @@ def validate_token(raw_token: str, settings: JWTSettings) -> dict:
         raise AuthError(f"token is invalid: {exc}") from exc
 
     group_id = claims.get("group_id")
-    if not group_id or not isinstance(group_id, str):
+    if require_group and (not group_id or not isinstance(group_id, str)):
         # Never fall back to headers or other sources for tenant identity.
         raise AuthError("token is missing the required group_id claim")
     roles = claims.get("roles", [])
@@ -147,7 +147,7 @@ def validate_token(raw_token: str, settings: JWTSettings) -> dict:
         raise AuthError("token roles claim must be a list of strings")
     return {
         "user_id": claims["sub"],
-        "group_id": group_id,
+        "group_id": group_id if isinstance(group_id, str) else "",
         "roles": tuple(roles),
     }
 

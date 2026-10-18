@@ -32,6 +32,7 @@ from deps import (
 )
 from internal_auth import InternalAuthError
 from routes.admin import router as admin_router
+from routes.identity_admin import router as identity_router
 from routes.documents import router as documents_router
 from routes.jobs import router as jobs_router
 from routes.review import router as review_router
@@ -125,6 +126,7 @@ def create_app(
     # (and any embedder) control configuration deterministically.
     app.dependency_overrides[get_settings] = lambda: settings
     app.include_router(admin_router)
+    app.include_router(identity_router)
     app.include_router(documents_router)
     app.include_router(jobs_router)
     app.include_router(review_router)

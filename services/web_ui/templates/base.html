@@ -18,6 +18,7 @@
       <a href="/review" class="{% if nav_active == 'review' %}active{% endif %}">Review queue</a>
       <a href="/quarantine" class="{% if nav_active == 'quarantine' %}active{% endif %}">Quarantine</a>
       <a href="/search" class="{% if nav_active == 'search' %}active{% endif %}">Search</a>
+      <a href="/groups" class="{% if nav_active == 'groups' %}active{% endif %}">Groups</a>
       {% if is_admin %}
         <span class="nav-admin">Admin:
           <a href="/admin/documents" class="{% if nav_active == 'admin-documents' %}active{% endif %}">Documents</a>
@@ -26,7 +27,7 @@
         </span>
       {% endif %}
       <span class="nav-right">
-        <span class="tenant" title="Tenant (from your login token)">{{ identity.group_id }}</span>
+        <span class="tenant" title="Active DRUID group (validated by gateway)">{{ identity.group_id }}</span>
         <form method="post" action="/logout" style="display:inline">
           <button type="submit" class="link-button">Log out</button>
         </form>

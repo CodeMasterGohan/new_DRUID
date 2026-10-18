@@ -1,7 +1,7 @@
 # gateway — auth gateway (FastAPI). CPU only.
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
-    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/app
 WORKDIR /app
 COPY services/gateway/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # services tree layout must exist in the image (not just gateway's files).
 COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
-COPY services/gateway/ /app/
+COPY services/catalog/ /app/services/catalog/
+COPY services/gateway/ /app/services/gateway/
 EXPOSE 8000
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "services.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -85,8 +85,9 @@ class SearchResult:
             "document_version": self.document_version,
             "chunk_id": self.chunk_id,
             "filename": self.filename,
-            "page_start": self.page_start,
-            "page_end": self.page_end,
+            # External/MCP responses use one-based citation pages.
+            "page_start": self.page_start + 1,
+            "page_end": self.page_end + 1,
             "heading_path": list(self.heading_path),
             "text": self.text,
             "rank": self.rank,

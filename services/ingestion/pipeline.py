@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import abc
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 
 from services.catalog.activation import activate_version
 from services.catalog.errors import ActivationError
-from services.catalog.models import Base, IngestionState, Job, Tenant
+from services.catalog.models import Base, Document, IngestionState, Job, Tenant
 from services.catalog.repository import CatalogRepository
 from services.common.request_context import RequestContext
 
@@ -231,6 +232,32 @@ def _transition(repo: CatalogRepository, job: Job, version_id: uuid.UUID,
     log.info("job %s → %s", job.id, state.value)
 
 
+def build_production_deps() -> PipelineDeps:
+    """RQ workers must not run with mock embeddings or a logging-only sink."""
+    from .embeddings import SentenceTransformersGemmaBackend
+    from .milvus_sink import MilvusIndexSink
+
+    required = ("EMBEDDING_MODEL_PATH", "MINILM_TOKENIZER_PATH",
+                "RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY",
+                "RUSTFS_BUCKET", "MILVUS_URI")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError("production ingestion missing: " + ", ".join(missing))
+    return PipelineDeps(
+        embedding_backend=SentenceTransformersGemmaBackend(),
+        index_sink=MilvusIndexSink(
+            os.environ["MILVUS_URI"],
+            os.environ.get("MILVUS_ALIAS", "project_knowledge_base"),
+        ),
+        object_store=RustFSObjectStore(
+            os.environ["RUSTFS_ENDPOINT"],
+            os.environ["RUSTFS_ACCESS_KEY"],
+            os.environ["RUSTFS_SECRET_KEY"],
+            os.environ["RUSTFS_BUCKET"],
+        ),
+    )
+
+
 def run_ingestion_job(
     job_id: str,
     *,
@@ -242,7 +269,7 @@ def run_ingestion_job(
     ``session_factory`` is a callable returning a SQLAlchemy Session; the
     default reads ``DATABASE_URL`` from the environment.
     """
-    deps = deps or PipelineDeps()
+    deps = deps if deps is not None else build_production_deps()
     session = session_factory() if session_factory else _default_session()
     log.info("worker start: ingestion job=%s", job_id)
     try:
@@ -312,7 +339,9 @@ def _run(session, job_id: uuid.UUID, deps: PipelineDeps) -> str:
         repo.update_version_status(version_id, IngestionState.INDEXING,
                                    chunk_count_actual=len(records))
         session.commit()
-        deps.index_sink.index_chunks(records)
+        indexed = deps.index_sink.index_chunks(records)
+        if indexed != len(records):
+            raise RuntimeError("index sink did not confirm every inserted record")
 
         # ---- ACTIVATION (range check + quarantine gate live in catalog) ----
         activate_version(session, context, version_id)
@@ -414,7 +443,7 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
             table_texts = extract_tables_native(pdf_path, confident)
         if native_pages:
             trees.append(build_tree_from_native(
-                str(version.document_id), str(version.id), native_pages,
+                str(version.document_id), str(version.version_number), native_pages,
                 table_texts, parser_revision=PARSER_REVISION_NATIVE))
 
         # Visual path: render → olmOCR → tree; low quality → quarantine.
@@ -447,7 +476,7 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
                 results.append(result)
             if results:
                 trees.append(build_tree_from_olmocr(
-                    str(version.document_id), str(version.id), results,
+                    str(version.document_id), str(version.version_number), results,
                     parser_revision=PARSER_REVISION_OLMOCR))
 
         if repo.pending_quarantine_count(version.id) > 0:
@@ -489,7 +518,8 @@ def _embed_chunks(chunks: list[Chunk], parse_out: dict, version,
                   session) -> list[dict]:
     """EMBEDDING stage: chunk vectors + page-image records → Milvus records."""
     backend = deps.embedding_backend
-    filename = ""  # display name resolved by the document API at query time
+    document = session.get(Document, version.document_id)
+    filename = document.display_name if document is not None else "document"
     texts = [build_document_text(c, filename=filename) for c in chunks]
     vectors = backend.embed_texts(texts)
 
@@ -497,6 +527,7 @@ def _embed_chunks(chunks: list[Chunk], parse_out: dict, version,
     for chunk, vector in zip(chunks, vectors):
         record = chunk.to_milvus_record(group_id)
         record["dense_vector"] = vector
+        record["metadata"]["filename"] = filename
         records.append(record)
 
     # Page-image records: visual pages always; native pages only when enabled.
@@ -515,14 +546,16 @@ def _embed_chunks(chunks: list[Chunk], parse_out: dict, version,
                 [i for i in pages_for_images if i in png_cache], img_vectors):
             rec = make_page_image_record(
                 document_id=str(version.document_id),
-                document_version=str(version.id),
+                document_version=str(version.version_number),
                 page_index=page_index,
                 render_ref=f"{tenant_prefix}/renders/page-{page_index:04d}.png",
                 filename=filename,
                 vector=vector,
                 group_id=group_id,
             )
-            records.append(rec.to_milvus_record())
+            img_record = rec.to_milvus_record()
+            img_record["metadata"]["filename"] = filename
+            records.append(img_record)
     return records
 
 
@@ -534,7 +567,7 @@ def _embed_chunks(chunks: list[Chunk], parse_out: dict, version,
 def run_deletion_job(job_id: str, *, session_factory=None,
                      deps: PipelineDeps | None = None) -> str:
     """Drive the complete deletion workflow (§12)."""
-    deps = deps or PipelineDeps()
+    deps = deps if deps is not None else build_production_deps()
     session = session_factory() if session_factory else _default_session()
     log.info("worker start: deletion job=%s", job_id)
     try:

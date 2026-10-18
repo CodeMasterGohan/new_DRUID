@@ -44,36 +44,70 @@ browser / AI agent / CLI
         pdftext ──► page router ──► olmOCR 2 FP8 on vLLM (ONLY GPU consumer)
 ```
 
-All containers also join the pre-existing external **`cora`** Docker network.
-Only three host ports are published: **8005** (web UI), **8002** (MCP),
-everything else is container-to-container.
+Backend containers remain on private Compose networks rather than joining
+the external **`cora`** network. Web UI and MCP retain opt-in cross-project
+reachability; ingestion also joins **`druid-net`** for GPU OCR.
+Only two host ports are published: **8005** (web UI) and **8002** (MCP,
+loopback-bound by default). Everything else is container-to-container.
 
 ## Quickstart
 
 ```bash
 cp .env.example .env          # fill in secrets (never commit .env)
 docker network create cora    # only if not already present on your host
+docker network create druid-net # shared with the GPU OCR project
 
 # 1. Infrastructure
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 # 2. Schema + search collections (one-shot, must exit 0)
-docker compose -f deploy/docker-compose.yml run --rm catalog
-docker compose -f deploy/docker-compose.yml run --rm milvus_setup
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm catalog
+docker compose --env-file .env -f deploy/docker-compose.yml run --rm milvus_setup
 # 3. CPU services
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 # 4. GPU plane (H200 host only) — vLLM serving olmOCR-2-7B-FP8
-docker compose -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
+docker compose --env-file .env -f deploy/docker-compose.gpu.yml up -d vllm-olmocr
 ```
 
-Then open **http://localhost:8005**, paste an operator-provisioned JWT on the
-login page, and upload a document. The review queue catches pages the router
-couldn't resolve on its own; an admin sees cross-tenant documents, jobs, and
-quotas.
+After configuring Keycloak and HTTPS (see below), open the DRUID HTTPS
+hostname. The login page redirects to Keycloak using Authorization Code + PKCE.
+**Token-paste login is disabled in production.** DRUID group membership and
+roles live in PostgreSQL and are managed with the Groups page or REST API,
+not in Keycloak. A user can belong to multiple groups; the selected group
+scopes uploads, searches, review and deletion. Members may remove only their
+own uploaded documents; group managers may manage group documents.
 
-> **First boot needs three things:** model weights staged per
-> `services/artifacts/manifests/` (`MODEL_DIR`, read-only), the `cora`
-> network present, and live Postgres/Redis/RustFS/Milvus. See
-> `docs/runbook.md`.
+> **First boot:** stage model artifacts and initialize the `druid-net`
+> GPU network. Backend and MCP containers are private; externally exposed
+> browsers and AI clients use the HTTPS reverse proxy in front of the UI
+> and authenticated API gateway. `cora` is no longer required.
+> See `docs/runbook.md` and `DRUID_HARDENING.md` before any rollout.
+
+## AI skills for natural-language DRUID interaction
+
+- [`skills/druid-natural-language/SKILL.md`](skills/druid-natural-language/SKILL.md) — load this when someone asks an AI in ordinary language to search DRUID, answer questions with document citations, upload a PDF, check ingestion, review a page, delete an owned document, or work in multiple groups. Includes accurate intent routing, the gateway API contract, scenario examples, and a safe standard-library client in `scripts/druid_user.py`.
+- [`skills/druid-management/SKILL.md`](skills/druid-management/SKILL.md) — privileged companion for DRUID system-administrator REST actions: users, internal groups, memberships, quotas and document oversight.
+- [`skills/druid-sage/SKILL.md`](skills/druid-sage/SKILL.md) — usage guide and project disambiguation for DRUID versus New_sage.
+
+The AI needs an **authorized Keycloak bearer token and a real HTTPS DRUID
+gateway connection**; installing a skill alone does not create a remote
+connector or silently grant access. The user skill uses DRUID groups from
+PostgreSQL and selects them per request, never Keycloak group claims.
+Use documented APIs through the gateway, not internal service ports.
+
+`DRUID_API_BASE` is an HTTPS origin and `DRUID_ACCESS_TOKEN` is a
+short-lived access token supplied to the agent runtime by its approved
+identity integration. Example user operations from a connected shell:
+
+```bash
+python skills/druid-natural-language/scripts/druid_user.py me
+python skills/druid-natural-language/scripts/druid_user.py --group engineering search "What is our backup schedule?"
+python skills/druid-natural-language/scripts/druid_user.py --group engineering upload ./handbook.pdf
+python skills/druid-natural-language/scripts/druid_user.py --group engineering docs
+```
+
+All write operations remain subject to DRUID's API permissions and any
+required human confirmation. The skill and examples are *not* a
+deployed service; a live Keycloak/H200 integration test remains pending.
 
 ## MCP tools
 
@@ -90,8 +124,8 @@ quotas.
 ```jsonc
 // Claude Code / MCP client config (Streamable HTTP)
 { "mcpServers": { "druid": {
-  "url": "http://<h200>:8002/mcp",
-  "headers": { "Authorization": "Bearer <operator-provisioned JWT>" }
+  "url": "https://druid.example.invalid/mcp",
+  "headers": { "Authorization": "Bearer <Keycloak access JWT>" }
 }}}
 // …or local trusted stdio:
 // python -m mcp_server.stdio_adapter --user-id you --group-id your-tenant --roles admin,reviewer
@@ -104,7 +138,8 @@ quotas.
 | Documents | `POST /v1/documents/register` → `POST /v1/documents/{id}/bytes` (ticketed upload), `GET /v1/documents`, `GET /v1/documents/{id}`, `DELETE /v1/documents/{id}` |
 | Review | `GET /v1/review/items`, `GET …/{item_id}`, `POST …/{item_id}/resolve` |
 | Jobs | `GET /v1/jobs/{job_id}` |
-| Admin (`admin` role) | `GET /v1/admin/documents`, `GET /v1/admin/jobs`, `GET /v1/admin/quotas` |
+| System admin | `GET/POST/PATCH /v1/admin/users`, `GET/POST/PATCH /v1/admin/groups`, `PUT/DELETE /v1/admin/groups/{group}/members/{subject}`, `GET /v1/admin/documents`, `GET /v1/admin/jobs`, `GET /v1/admin/quotas` |
+| Group context | `GET /v1/identity/me`, request header `X-Group-Selection: engineering` (verified against database membership) |
 
 Two-phase upload exists so large files can be chunked/resumable (the web UI
 splits in the browser); single-shot multipart upload also works.
@@ -152,6 +187,20 @@ All tunables live in `.env.example` (copy to `.env`). The highlights:
 | `QUOTA_INGEST_PAGES_PER_DAY` / `QUOTA_QUERY_QPS` | `1000` / `10` | Per-tenant quotas (Redis) |
 | `MODEL_DIR` | `/models` | Host artifact registry, mounted read-only |
 | `MAX_UPLOAD_MB` / `MAX_PAGES_PER_DOCUMENT` | `200` / `2000` | Upload guards |
+
+## GitLab CI/CD
+
+The checked-in [`.gitlab-ci.yml`](.gitlab-ci.yml) covers contracts,
+GitLab runner validation, advisory source/dependency/secret/security scans,
+Docker image builds and registry publishing, immutable release manifests,
+manual staging/production migrations and deployments, rollback, optional
+per-image vulnerability and CycloneDX SBOM reports, and private smoke tests.
+See [`.gitlab/README.md`](.gitlab/README.md) for **environment-specific
+CI variables**, runner/SSH/registry requirements, and the explicit release
+approval sequence. Nothing deploys until the GitLab project is configured
+and a human starts its manual jobs. This repository's GitHub Actions only
+validate the GitLab YAML/Compose contract; production GitLab CI lint must
+still run against the actual GitLab instance.
 
 ## Testing
 

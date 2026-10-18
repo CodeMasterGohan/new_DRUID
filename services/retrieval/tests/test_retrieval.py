@@ -312,6 +312,8 @@ def test_result_contract_fields_exact():
     }
     assert d["trust"] == TRUST_MARKER == "untrusted-document-content"
     assert d["rank"] == 1
+    assert d["page_start"] == result.page_start + 1
+    assert d["page_end"] == result.page_end + 1
     assert d["provenance"] in ("native-detected", "olmocr-routed")
     assert d["modality"] in ("text", "page_image")
 
@@ -397,9 +399,14 @@ def test_truncate_to_budget():
     assert len(out) <= 420 * 4
 
 
+def test_first_page_citation_is_one_based():
+    from services.retrieval.citations import build_source_reference
+    assert build_source_reference("first.pdf", 0, 0, []) == "first.pdf (p. 1)"
+
+
 def test_source_reference_uses_metadata_not_raw_text():
     ref = build_source_reference("report.pdf", 3, 5, ["A", "B"])
-    assert ref == "report.pdf (pp. 3-5) — A / B"
+    assert ref == "report.pdf (pp. 4-6) — A / B"
     assert "secret document content" not in ref
 
 
