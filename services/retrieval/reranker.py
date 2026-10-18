@@ -7,6 +7,8 @@ passed to the cross-encoder.
 
 from __future__ import annotations
 
+import os
+
 from .interfaces import Reranker
 from .models import FusedCandidate
 
@@ -40,7 +42,14 @@ def rerank_text_candidates(
     text_only = [c for c in candidates if c.record.modality == "text"]
     if not text_only:
         return []
-    passages = [truncate_to_budget(c.record.text) for c in text_only]
+    if os.getenv("DRUID_RUST_FASTPATH", "0") == "1":
+        from druid_retrieval_fastpath import truncate_passages
+
+        passages = truncate_passages(
+            [c.record.text for c in text_only], MAX_PASSAGE_CHARS
+        )
+    else:
+        passages = [truncate_to_budget(c.record.text) for c in text_only]
     scores = reranker.score(query, passages)
     if len(scores) != len(text_only):
         raise ValueError(
