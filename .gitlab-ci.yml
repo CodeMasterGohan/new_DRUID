@@ -9,7 +9,7 @@ workflow:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
-stages: [validate, test, security, rust, build, package, deploy, verify]
+stages: [validate, test, security, build, package, deploy, verify]
 
 default:
   interruptible: true
