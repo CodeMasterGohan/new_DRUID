@@ -19,7 +19,9 @@ are enabled. Commits to GitHub alone do not execute GitLab CI.
    Immutable commit-SHA tags are pushed on default-branch and tag
    pipelines. On merge requests, builds are optional/manual and do not push.
 6. **Package:** retain a release-manifest artifact with exact commit/ref
-   and hashes of Compose/image manifests; no secrets are bundled.
+   and hashes of Compose/image manifests; no secrets are bundled. Optional
+   manual `image-scan-and-sbom` builds vulnerability reports and per-image
+   CycloneDX SBOM artifacts from the released registry images.
 7. **Deploy:** **manual only**, staging from the default branch and
    production from Git tags. Remote host has an existing secret .env and
    required staged models. Manual *migrate-* job precedes *deploy-* job
@@ -131,6 +133,20 @@ when supported by your GitLab edition.
 - Configure notifications, retention, alerts, backups, and incident
   response in your GitLab/observability environment; no placeholders
   silently enable these integrations.
+
+## Additional supply-chain controls to enable after setup
+
+- Run the manual `image-scan-and-sbom` per-service jobs on candidate
+  releases. Review vulnerability findings and preserve SBOM artifacts
+  for your inventory/compliance process. The source/dependency scans
+  and image scans are advisory initially, **not a security clearance**.
+- Configure image-signing/attestations in your registry (e.g., Cosign)
+  after you have selected your actual signing identity and trust policy.
+  No default signing credential is invented by this template.
+- Add SAST, policy-as-code, code-coverage thresholds, license policy,
+  retention and runner security hardening as your environment requires.
+- For tagged releases, retain old SHA-tagged container images and a
+  tested database backup long enough to support a real rollback.
 
 ## GitLab CI lint
 
