@@ -12,6 +12,7 @@ case "$root" in /*) ;; *) echo "DEPLOY_PATH must be absolute" >&2; exit 2;; esac
 case "$root" in *[!a-zA-Z0-9_./-]*|"") echo "Unsafe DEPLOY_PATH" >&2; exit 2;; esac
 case "$prefix" in *[!a-zA-Z0-9_:./-]*|"") echo "Invalid registry image prefix" >&2; exit 2;; esac
 case "$tag" in *[!a-fA-F0-9]*|"") echo "Use immutable Git commit SHA image tag" >&2; exit 2;; esac
+[ "${#tag}" -eq 40 ] || { echo "Expected full 40-character commit SHA" >&2; exit 2; }
 
 cd "$root"
 test -f deploy/docker-compose.yml || { echo "Compose config missing" >&2; exit 3; }
@@ -47,9 +48,10 @@ case "$operation" in
     # Infrastructure is explicitly started, without starting application services.
     # Remote host must already have persistent storage, networks, and models staged.
     # shellcheck disable=SC2086
+    compose pull "$schema" milvus_setup
     compose up -d --no-build $infrastructure
-    compose run --rm --no-deps "$schema"
-    compose run --rm --no-deps milvus_setup
+    compose run --rm --no-deps --no-build "$schema"
+    compose run --rm --no-deps --no-build milvus_setup
     # Migration is approved for this exact set of prebuilt image versions.
     : > ".gitlab/migrations-approved-$tag"
     printf 'Migration/index setup passed for %s\n' "$tag"
@@ -63,17 +65,22 @@ case "$operation" in
     # Pull the EXACT immutable registry-tagged images; never build on target.
     # shellcheck disable=SC2086
     compose pull $images
+    old=""
     if test -f .gitlab/current-image-tag; then
       old=$(cat .gitlab/current-image-tag)
       case "$old" in *[!a-fA-F0-9]*|"") echo "Invalid previous tag" >&2; exit 4;; esac
-      if test "$old" != "$tag"; then
-        printf '%s\n' "$old" > .gitlab/previous-image-tag
-      fi
+      [ "${#old}" -eq 40 ] || { echo "Invalid previous image SHA" >&2; exit 4; }
     fi
     # Prevent Compose from auto-starting one-shot schema services.
+    # Record the previous version ONLY after the new services start healthy.
     # shellcheck disable=SC2086
-    compose up -d --no-build --no-deps $running
-    printf '%s\n' "$tag" > .gitlab/current-image-tag
+    compose up -d --no-build --no-deps --wait --wait-timeout "${COMPOSE_DEPLOY_WAIT_TIMEOUT:-600}" $running
+    if test -n "$old" && test "$old" != "$tag"; then
+      printf '%s\n' "$old" > .gitlab/previous-image-tag.tmp
+      mv .gitlab/previous-image-tag.tmp .gitlab/previous-image-tag
+    fi
+    printf '%s\n' "$tag" > .gitlab/current-image-tag.tmp
+    mv .gitlab/current-image-tag.tmp .gitlab/current-image-tag
     compose ps
     ;;
   rollback)
@@ -90,9 +97,13 @@ case "$operation" in
     # shellcheck disable=SC2086
     compose pull $images
     # shellcheck disable=SC2086
-    compose up -d --no-build --no-deps $running
-    printf '%s\n' "$previous" > .gitlab/current-image-tag
-    if test -n "$current"; then printf '%s\n' "$current" > .gitlab/previous-image-tag; fi
+    compose up -d --no-build --no-deps --wait --wait-timeout "${COMPOSE_DEPLOY_WAIT_TIMEOUT:-600}" $running
+    printf '%s\n' "$previous" > .gitlab/current-image-tag.tmp
+    mv .gitlab/current-image-tag.tmp .gitlab/current-image-tag
+    if test -n "$current"; then
+      printf '%s\n' "$current" > .gitlab/previous-image-tag.tmp
+      mv .gitlab/previous-image-tag.tmp .gitlab/previous-image-tag
+    fi
     compose ps
     ;;
   status)
