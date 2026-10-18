@@ -188,6 +188,16 @@ All tunables live in `.env.example` (copy to `.env`). The highlights:
 | `MODEL_DIR` | `/models` | Host artifact registry, mounted read-only |
 | `MAX_UPLOAD_MB` / `MAX_PAGES_PER_DOCUMENT` | `200` / `2000` | Upload guards |
 
+## Rust CPU experiment
+
+The optional [PyO3 Rust retrieval fast path](docs/rust-fastpath.md) covers
+only post-filter RRF score fusion and batched passage truncation. Measured
+on GitHub Actions, **Rust was slower** than Python for representative
+CPU microbenchmarks, so `DRUID_RUST_FASTPATH` remains **off** by default.
+The regular images do not install the optional wheel, and Python/model
+inference behavior is unchanged. The experiment is parity-tested in CI
+without weakening PostgreSQL authorization or retrieval predicates.
+
 ## Testing
 
 ```bash
