@@ -4,7 +4,7 @@
 # Regenerate the locked file on the 3.11 image target before release.
 # NOTE: also copies ../catalog + ../common as a services tree — see Dockerfile.
 # sqlalchemy-family pins match the catalog service's install-verified versions.
-fastapi==0.115.8
+fastapi==0.159.1
 uvicorn[standard]==0.34.0
 pydantic==2.11.7
 pydantic-settings==2.7.1
@@ -18,6 +18,6 @@ redis==5.2.1
 httpx==0.28.1
 structlog==25.1.0
 # pypdf: trailer-only page counts at upload (never full parsing here).
-pypdf==6.19.0
+pypdf==6.21.1
 # test-only:
-pytest==8.3.5
+pytest==9.1.1

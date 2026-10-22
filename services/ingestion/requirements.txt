@@ -11,7 +11,7 @@
 # sqlalchemy-family pins match the catalog service's install-verified versions.
 pdftext==0.4.1  # 0.4.2 does not exist on PyPI; closest real pin
 pypdfium2==4.30.0  # pdftext 0.4.1 pins ==4.30.0
-pillow==11.1.0
+pillow==13.0.0
 rq==2.0.0
 redis==5.2.1
 minio==7.2.13
@@ -28,7 +28,7 @@ pymilvus==2.5.6  # required by real MilvusIndexSink
 # exist. Regenerate pins with pip-compile before release.
 sentence-transformers==6.1.0
 transformers==5.18.0
-torch==2.6.0  # matches the embedding service; CPU-index install in Dockerfile
+torch==2.14.1  # matches the embedding service; CPU-index install in Dockerfile
 # olmOCR toolkit: prompt builders only (never hand-rolled prompts, §5).
 # The vLLM server does inference; this client only builds prompts.
 olmocr==0.4.27  # 0.4.0 was never published to PyPI; 0.4.2 pins transformers==4.55.2, conflicting with the EmbeddingGemma 2 transformers 5.x requirement. 0.4.27 keeps transformers under the 'gpu' extra only, and its build_no_anchoring_v4_yaml_prompt is byte-identical to 0.4.2's (verified 2026-10-08).

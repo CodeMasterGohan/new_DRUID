@@ -162,7 +162,7 @@ jobs:
         run: |
           result=0
           for req in services/*/requirements.txt; do
-            python -m pip_audit -r "$req" --disable-pip --no-deps || result=1
+            python -m pip_audit -r "$req" || result=1
           done
           exit "$result"
       - name: Source vulnerability, secret and configuration gate

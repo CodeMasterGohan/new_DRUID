@@ -68,7 +68,8 @@ def create_app(
     # None in production.
     app.state.api_transport = api_transport
 
-    route_helpers.templates = Jinja2Templates(
+    from routes import CompatibleTemplates
+    route_helpers.templates = CompatibleTemplates(
         directory=str(HERE / "templates")
     )
     app.mount(

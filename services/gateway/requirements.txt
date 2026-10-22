@@ -3,15 +3,15 @@
 # this pin set to a consistent closure with all direct == pins honored.
 # Regenerate the locked file on the 3.11 image target before release.
 # Verified installable + test-passing 2026-10-08 (catalog + gateway suites).
-fastapi==0.115.12
+fastapi==0.159.1
 uvicorn[standard]==0.34.0
 pydantic==2.11.7
 pydantic-settings==2.7.1
-pyjwt==2.10.1
-cryptography==44.0.2
+pyjwt==2.15.1
+cryptography==50.0.2
 httpx==0.28.1
 redis==5.2.1
 sqlalchemy==2.0.38
 psycopg[binary]==3.2.9
 structlog==25.1.0
-pytest==8.3.5
+pytest==9.1.1

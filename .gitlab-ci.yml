@@ -118,7 +118,7 @@ dependency-audit:
       result=0
       for req in services/*/requirements.txt; do
         echo "Auditing $req"
-        python -m pip_audit -r "$req" --disable-pip --no-deps || result=1
+        python -m pip_audit -r "$req" || result=1
       done
       exit "$result"
   allow_failure: false

@@ -14,7 +14,7 @@ COPY services/ingestion/requirements.txt .
 # torch from the CPU index FIRST (mirrors the embedding service): the
 # default PyPI torch wheel bundles CUDA and must never land here (§2 GPU
 # arbitration — the H200 belongs to vLLM/olmOCR).
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 \
  && pip install --no-cache-dir -r requirements.txt
 # Full services tree (not a flat copy): the RQ worker must import the
 # dotted-path entry points `services.ingestion.pipeline.run_ingestion_job`
