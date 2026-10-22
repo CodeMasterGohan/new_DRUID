@@ -29,6 +29,7 @@ import uuid
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Date,
     Enum as SAEnum,
     Float,
     ForeignKey,
@@ -360,3 +361,13 @@ class ParserRevisionStats(Base):
     __table_args__ = (
         UniqueConstraint("parser", "parser_revision", name="uq_parser_revision"),
     )
+
+
+class IngestionAdmission(Base):
+    """One charge per version, committed atomically with its ingestion job."""
+    __tablename__ = "ingestion_admissions"
+    version_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    quota_day: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    pages: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (Index("ix_admission_tenant_day", "tenant_id", "quota_day"),)

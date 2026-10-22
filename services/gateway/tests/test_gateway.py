@@ -185,7 +185,7 @@ def test_caller_supplied_tenant_id_in_tool_args_is_ignored(client):
     # Quota was consumed against the token's tenant, not the spoofed one.
     store = client.app.state.quota_store
     decision = store.consume_ingestion_pages("tenant-a", 998)
-    assert decision.allowed is False  # 3 + 998 > 1000
+    assert decision.allowed is True  # client page counts do not charge admission
     assert store.consume_ingestion_pages("evil-tenant", 1000).allowed is True
 
 
@@ -272,7 +272,7 @@ def test_query_qps_quota_returns_429_with_retry_after(monkeypatch):
     assert int(resp.headers["Retry-After"]) >= 1
 
 
-def test_ingestion_daily_quota_returns_429(monkeypatch):
+def test_gateway_does_not_charge_unvalidated_mcp_page_counts(monkeypatch):
     monkeypatch.setattr(proxy_module, "forward_request", fake_forward)
     app = create_app(make_settings(quota_ingest_pages_per_day=10))
     c = TestClient(app, raise_server_exceptions=False)
@@ -290,9 +290,8 @@ def test_ingestion_daily_quota_returns_429(monkeypatch):
         )
 
     assert ingest(6).status_code == 200
-    resp = ingest(5)  # 6 + 5 > 10
-    assert resp.status_code == 429
-    assert "Retry-After" in resp.headers
+    resp = ingest(5)
+    assert resp.status_code == 200  # server admission is tested in document_api
 
 
 def test_upload_enforces_size_and_page_limits(monkeypatch):
@@ -307,10 +306,10 @@ def test_upload_enforces_size_and_page_limits(monkeypatch):
                   headers=headers)
     assert resp.status_code == 413
 
-    # Over the per-document page cap -> 400.
+    # Untrusted page hints are ignored; the document API counts actual pages.
     resp = c.post("/v1/documents/upload?page_count=2001", content=b"x",
                   headers=headers)
-    assert resp.status_code == 400
+    assert resp.status_code == 200
 
     # Within limits -> forwarded.
     resp = c.post("/v1/documents/upload?page_count=5", content=b"x",

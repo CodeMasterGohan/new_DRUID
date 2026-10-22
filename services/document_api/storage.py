@@ -20,6 +20,11 @@ class ObjectStore(abc.ABC):
     def put_bytes(self, key: str, data: bytes, content_type: str = "") -> None:
         """Store bytes under ``key``."""
 
+    def put_file(self, key, stream, length, content_type=""):
+        """Compatibility fallback for test stores; production overrides with streaming."""
+        stream.seek(0)
+        self.put_bytes(key, stream.read(length), content_type)
+
     @abc.abstractmethod
     def get_bytes(self, key: str) -> bytes:
         """Fetch bytes stored under ``key``; raise KeyError when missing."""
@@ -90,6 +95,11 @@ class RustFSObjectStore(ObjectStore):
             len(data),
             content_type=content_type or "application/octet-stream",
         )
+
+    def put_file(self, key, stream, length, content_type=""):
+        stream.seek(0)
+        self._client.put_object(self._bucket, key, stream, length,
+                               content_type=content_type or "application/octet-stream")
 
     def get_bytes(self, key: str) -> bytes:
         return self._client.get_object(self._bucket, key).read()

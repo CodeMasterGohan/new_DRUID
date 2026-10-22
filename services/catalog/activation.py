@@ -159,7 +159,7 @@ def activate_version(
         )
 
     document = (
-        session.execute(select(Document).where(Document.id == version.document_id))
+        session.execute(select(Document).where(Document.id == version.document_id).with_for_update().execution_options(populate_existing=True))
         .scalars()
         .one()
     )

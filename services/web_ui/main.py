@@ -10,6 +10,7 @@ Uvicorn entry point: ``main:app`` (see Dockerfile).
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -53,6 +54,10 @@ def create_app(
 ) -> FastAPI:
     ui = ui_settings or WebUISettings()
     app = FastAPI(title="DRUID Web UI", docs_url=None, redoc_url=None)
+    from services.common.upload_limits import UploadBodyLimit
+    app.add_middleware(UploadBodyLimit, max_bytes=(ui.max_upload_mb + 1) * 1024 * 1024,
+                       concurrency=int(os.environ.get('UPLOAD_CONCURRENCY', '4')))
+
 
     app.state.web_ui_settings = ui
     app.state.jwt_settings = _jwt_settings(ui)

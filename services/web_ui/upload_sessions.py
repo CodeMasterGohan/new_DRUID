@@ -12,6 +12,8 @@ compose deployment; a multi-replica UI would need shared temp storage.
 from __future__ import annotations
 
 import time
+import tempfile
+from pathlib import Path
 import uuid
 from dataclasses import dataclass, field
 
@@ -26,7 +28,8 @@ class UploadSession:
     owner_group_id: str | None = None
     max_bytes: int | None = None
     created_at: float = field(default_factory=time.time)
-    chunks: dict[int, bytes] = field(default_factory=dict)
+    chunks: dict[int, int] = field(default_factory=dict)
+    directory: object = field(default_factory=tempfile.TemporaryDirectory)
     current_bytes: int = 0
 
     def matches_owner(
@@ -54,8 +57,26 @@ class UploadSession:
             i in self.chunks for i in range(self.total_chunks)
         )
 
+    def assemble_file(self):
+        result = tempfile.TemporaryFile()
+        try:
+            for i in range(self.total_chunks):
+                with open(Path(self.directory.name) / str(i), 'rb') as chunk:
+                    while data := chunk.read(1024 * 1024):
+                        result.write(data)
+            result.seek(0)
+            return result
+        except BaseException:
+            result.close()
+            raise
+
     def assemble(self) -> bytes:
-        return b"".join(self.chunks[i] for i in range(self.total_chunks))
+        # Compatibility for callers/tests; the HTTP path uses assemble_file.
+        with self.assemble_file() as stream:
+            return stream.read()
+
+    def close(self):
+        self.directory.cleanup()
 
 
 class UploadSessionStore:
@@ -74,6 +95,8 @@ class UploadSessionStore:
         max_bytes: int | None = None,
     ) -> UploadSession:
         self._gc()
+        if len(self._sessions) >= 32:
+            raise ValueError("upload session capacity exhausted; retry later")
         session = UploadSession(
             session_id=uuid.uuid4().hex,
             filename=filename,
@@ -97,7 +120,7 @@ class UploadSessionStore:
         if session is None:
             return None
         if time.time() - session.created_at > self._ttl:
-            del self._sessions[session_id]
+            self._sessions.pop(session_id).close()
             return None
         if not session.matches_owner(
             owner_user_id=owner_user_id,
@@ -124,16 +147,20 @@ class UploadSessionStore:
             raise KeyError("unknown or expired upload session")
         if not 0 <= index < session.total_chunks:
             raise ValueError(f"chunk index {index} out of range")
-        prev_len = len(session.chunks.get(index, b""))
+        prev_len = session.chunks.get(index, 0)
         new_bytes = session.current_bytes - prev_len + len(data)
         if session.max_bytes is not None and new_bytes > session.max_bytes:
             raise ValueError("accumulated chunks exceed maximum upload size")
-        session.chunks[index] = data
+        (Path(session.directory.name) / str(index)).write_bytes(data)
+        session.chunks[index] = len(data)
         session.current_bytes = new_bytes
         return session
 
     def pop(self, session_id: str) -> UploadSession | None:
-        return self._sessions.pop(session_id, None)
+        session = self._sessions.pop(session_id, None)
+        if session is not None:
+            session.close()
+        return session
 
     def _gc(self) -> None:
         now = time.time()
@@ -141,7 +168,7 @@ class UploadSessionStore:
             sid for sid, s in self._sessions.items() if now - s.created_at > self._ttl
         ]
         for sid in expired:
-            del self._sessions[sid]
+            self._sessions.pop(sid).close()
 
 
 __all__ = ["UploadSession", "UploadSessionStore"]

@@ -299,7 +299,12 @@ def run_ingestion_job(
     session = session_factory() if session_factory else _default_session()
     log.info("worker start: ingestion job=%s", job_id)
     try:
-        return _run(session, uuid.UUID(job_id), deps)
+        from services.catalog.work_lock import document_work_lock
+        job = session.get(Job, uuid.UUID(job_id))
+        if job is None:
+            raise ValueError(f"job {job_id} not found")
+        with document_work_lock(session, job.document_id, wait=True):
+            return _run(session, uuid.UUID(job_id), deps)
     finally:
         session.close()
 
@@ -327,7 +332,7 @@ def _run(session, job_id: uuid.UUID, deps: PipelineDeps) -> str:
     if job is None:
         raise ValueError(f"job {job_id} not found")
     if job.state in (IngestionState.READY, IngestionState.FAILED,
-                     IngestionState.DELETED):
+                     IngestionState.DELETED, IngestionState.REVIEW_REQUIRED):
         log.info("job %s already terminal (%s); skipping", job_id, job.state.value)
         return job.state.value
 
@@ -339,6 +344,7 @@ def _run(session, job_id: uuid.UUID, deps: PipelineDeps) -> str:
     )
     repo = CatalogRepository(session, context)
     repo.revalidate_job_context(job)  # fail closed when tenant went inactive
+    repo.get_document_for_write(job.document_id)  # tombstones never re-ingest
     job.attempt_count += 1
     session.commit()
 
@@ -628,40 +634,46 @@ def _embed_chunks(chunks: list[Chunk], parse_out: dict, version,
 
 def run_deletion_job(job_id: str, *, session_factory=None,
                      deps: PipelineDeps | None = None) -> str:
-    """Drive the complete deletion workflow (§12)."""
+    """Retry-safe cleanup: commit invisibility before external side effects."""
+    from services.catalog.work_lock import document_work_lock
     deps = deps if deps is not None else build_production_deps()
     session = session_factory() if session_factory else _default_session()
-    log.info("worker start: deletion job=%s", job_id)
     try:
         job = session.get(Job, uuid.UUID(job_id))
         if job is None:
             raise ValueError(f"job {job_id} not found")
-        context = RequestContext(
-            user_id=job.trusted_user_id,
-            group_id=job.trusted_group_id,
-            roles=tuple(job.trusted_roles or ()),
-            request_id=f"job-{job.id}",
-        )
-        repo = CatalogRepository(session, context)
-        repo.revalidate_job_context(job)
-        group_id = context.group_id
-        document_id = job.document_id
-        assert document_id is not None
-
-        repo.update_job_state(job.id, IngestionState.DELETING)
-        session.commit()
-        # 1. Catalog visibility first (hard filter hides everything anyway).
-        repo.soft_delete_document(document_id)
-        # 2. Milvus chunks (compaction lag covered by the catalog hard filter).
-        deps.index_sink.delete_document(str(document_id), group_id)
-        # 3. Originals, renders, trees, markdown.
-        deps.object_store.delete_prefix(f"{group_id}/{document_id}/")
-        # 4. Caches keyed by tenant+version are the retrieval agent's scope;
-        #    recorded here for reconciliation.
-        repo.update_job_state(job.id, IngestionState.DELETED)
-        session.commit()
-        log.info("job %s DELETED document %s", job.id, document_id)
-        return IngestionState.DELETED.value
+        with document_work_lock(session, job.document_id, wait=True):
+            job = session.get(Job, uuid.UUID(job_id))
+            if job.state == IngestionState.DELETED:
+                return job.state.value
+            context = RequestContext(user_id=job.trusted_user_id,
+                group_id=job.trusted_group_id, roles=tuple(job.trusted_roles or ()),
+                request_id=f"job-{job.id}")
+            repo = CatalogRepository(session, context)
+            repo.revalidate_job_context(job)
+            doc = repo.get_document_for_write(job.document_id, include_deleted=True)
+            if not doc.is_deleted:
+                repo.soft_delete_document(doc.id)
+            job.state = IngestionState.DELETING
+            job.attempt_count += 1
+            job.error = None
+            session.commit()  # tombstone survives every subsequent failure
+            try:
+                deps.index_sink.delete_document(str(doc.id), context.group_id)
+                job.payload = {**job.payload, "index_deleted": True}
+                session.commit()
+                deps.object_store.delete_prefix(f"{context.group_id}/{doc.id}/")
+                job.payload = {**job.payload, "objects_deleted": True}
+                job.state = IngestionState.DELETED
+                session.commit()
+                return job.state.value
+            except Exception as exc:
+                session.rollback()
+                job = session.get(Job, uuid.UUID(job_id))
+                job.state = IngestionState.FAILED
+                job.error = f"cleanup failed: {exc}"
+                session.commit()
+                raise
     finally:
         session.close()
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
 import uuid
 
@@ -62,6 +61,8 @@ def get_job_status(
     """
     try:
         job = repo.get_job(job_id)
+        if job.document_id is not None:
+            repo.get_document(job.document_id, include_deleted=job.job_type == "deletion")
     except NotFoundError:
         log.info(
             "job status → 404: job=%s group=%s",
@@ -80,18 +81,34 @@ def retry_job(
     settings: DocumentApiSettings = Depends(get_settings),
 ):
     """Re-enqueue a failed, retry-pending, or un-enqueued job within the tenant."""
-    import routes.documents as documents_routes
-
     try:
         job = repo.get_job(job_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
 
+    from services.catalog.work_lock import document_work_lock
+    from services.catalog.errors import ConflictError
+    try:
+        with document_work_lock(session, job.document_id):
+            job = repo.get_job(job_id)
+            doc = repo.get_document_for_write(job.document_id, include_deleted=job.job_type == "deletion")
+            if (repo.context.user_id != doc.created_by
+                    and not set(repo.context.roles).intersection({"admin", "group_admin"})):
+                # Legacy group-wide mode retains its historical mutation policy.
+                if settings.druid_auth_mode == "keycloak":
+                    raise HTTPException(403, "not the document owner")
+            return _retry_locked(job, repo, session, settings)
+    except ConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+def _retry_locked(job, repo, session, settings):
+    import routes.documents as documents_routes
     payload = dict(job.payload or {})
     unenqueued_upload = (
         job.state == IngestionState.UPLOADED and not payload.get("enqueued_at")
     )
-    if job.state not in (IngestionState.FAILED, IngestionState.RETRY_PENDING) and not unenqueued_upload:
+    if job.state not in (IngestionState.FAILED, IngestionState.RETRY_PENDING, IngestionState.DELETING) and not unenqueued_upload:
         raise HTTPException(
             status_code=409,
             detail=f"job in state {job.state.value} does not need retry",
@@ -112,33 +129,22 @@ def retry_job(
             status_code=400, detail=f"unsupported job_type {job.job_type!r}"
         )
 
+    repo.update_job_state(job.id, IngestionState.UPLOADED, error=None)
+    if job.document_version_id is not None:
+        repo.update_version_status(job.document_version_id, IngestionState.UPLOADED)
+    job.payload = {k: v for k, v in payload.items() if k != "enqueued_at"}
+    session.commit()  # visible before dispatch; the document lock excludes workers
     try:
         documents_routes.enqueue_rq(
             queue_name, entrypoint, job, settings.redis_url
         )
     except Exception as exc:
-        repo.update_job_state(
-            job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
-        )
-        if job.document_version_id is not None:
-            repo.update_version_status(
-                job.document_version_id, IngestionState.FAILED
-            )
-        session.commit()
+        documents_routes._mark_enqueue_failed(repo, job, session, exc)
         raise HTTPException(
             status_code=500, detail=f"job retry enqueue failed: {exc}"
         ) from exc
 
-    repo.update_job_state(job.id, IngestionState.UPLOADED, error=None)
-    if job.document_version_id is not None:
-        repo.update_version_status(
-            job.document_version_id, IngestionState.UPLOADED
-        )
-    job.payload = {
-        **payload,
-        "enqueued_at": datetime.now(timezone.utc).isoformat(),
-    }
-    session.commit()
+    documents_routes._mark_job_enqueued(job, session)
     return _job_to_response(job)
 
 

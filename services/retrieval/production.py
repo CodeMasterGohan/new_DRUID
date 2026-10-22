@@ -159,19 +159,38 @@ class MilvusVectorStore(VectorStore):
             metadata=metadata,
         )
 
+    def _predicates(self, predicate):
+        size = int(os.environ.get("MILVUS_FILTER_BATCH_SIZE", "256"))
+        if not 1 <= size <= 4096:
+            raise ValueError("MILVUS_FILTER_BATCH_SIZE must be between 1 and 4096")
+        if predicate.allowed_versions is None:
+            yield predicate
+            return
+        if not predicate.allowed_versions:
+            raise ValueError("empty allowed_versions")
+        pairs = sorted(predicate.allowed_versions)
+        for offset in range(0, len(pairs), size):
+            yield AuthPredicate(predicate.group_id, frozenset(pairs[offset:offset + size]))
+
     def _search(self, data, anns_field: str, predicate: AuthPredicate, top_k: int, params: dict) -> list[ScoredHit]:
-        expr = predicate.to_milvus_expr()
-        response = self._client.search(
-            collection_name=self._collection, data=[data], anns_field=anns_field,
-            filter=expr, limit=max(1, top_k), output_fields=list(self.FIELDS),
-            search_params=params,
-        )
-        hits = response[0] if response else []
-        return [
-            ScoredHit(record=self._record(hit.get("entity") or hit),
-                      rank=i, score=float(hit.get("distance", 0)))
-            for i, hit in enumerate(hits, 1)
-        ]
+        # Every batch retains tenant + exact doc/version ACL filtering. Searching
+        # top-k per disjoint batch then merging scores preserves global top-k.
+        best = {}
+        for batch in self._predicates(predicate):
+            response = self._client.search(
+                collection_name=self._collection, data=[data], anns_field=anns_field,
+                filter=batch.to_milvus_expr(), limit=max(1, top_k),
+                output_fields=list(self.FIELDS), search_params=params,
+            )
+            for hit in response[0] if response else []:
+                record = self._record(hit.get("entity") or hit)
+                score = float(hit.get("distance", 0))
+                if record.chunk_id not in best or score > best[record.chunk_id][1]:
+                    best[record.chunk_id] = (record, score)
+            # Bound retained candidates while processing large catalogs.
+            best = dict(sorted(best.items(), key=lambda item: (-item[1][1], item[0]))[:max(1, top_k)])
+        return [ScoredHit(record=record, rank=i, score=score)
+                for i, (record, score) in enumerate(best.values(), 1)]
 
     def dense_search(self, vector: Sequence[float], predicate: AuthPredicate, top_k: int) -> list[ScoredHit]:
         return self._search(list(vector), "dense_vector", predicate, top_k,
@@ -193,13 +212,19 @@ class MilvusVectorStore(VectorStore):
         tokens = list(dict.fromkeys(expanded))[:32]
         if not tokens:
             return []
-        expr = predicate.to_milvus_expr()
-        expr += " and ARRAY_CONTAINS_ANY(identifiers, " + json.dumps(tokens) + ")"
-        rows = self._client.query(
-            collection_name=self._collection, filter=expr,
-            output_fields=list(self.FIELDS), limit=max(1, top_k),
-        )
-        return [ScoredHit(record=self._record(row), rank=i) for i, row in enumerate(rows, 1)]
+        records = {}
+        for batch in self._predicates(predicate):
+            expr = batch.to_milvus_expr()
+            expr += " and ARRAY_CONTAINS_ANY(identifiers, " + json.dumps(tokens) + ")"
+            rows = self._client.query(collection_name=self._collection, filter=expr,
+                output_fields=list(self.FIELDS), limit=max(1, top_k))
+            for row in rows:
+                record = self._record(row)
+                records[record.chunk_id] = record
+            if len(records) >= max(1, top_k):
+                break  # Identifier matches have no relevance score; any top-k matches suffice.
+        return [ScoredHit(record=record, rank=i)
+                for i, record in enumerate(list(records.values())[:max(1, top_k)], 1)]
 
     def fetch_neighbors(self, record: StoredRecord, predicate: AuthPredicate, window: int = 1) -> list[StoredRecord]:
         if window <= 0:
@@ -209,7 +234,10 @@ class MilvusVectorStore(VectorStore):
         if ordinal is None:
             return []
         from .predicates import _escape_milvus_string
-        expr = predicate.to_milvus_expr()
+        pair = (record.document_id, record.document_version)
+        if predicate.allowed_versions is not None and pair not in predicate.allowed_versions:
+            return []
+        expr = AuthPredicate(predicate.group_id, frozenset({pair})).to_milvus_expr()
         expr += (
             f' and document_id == "{_escape_milvus_string(record.document_id)}"'
             f' and document_version == "{_escape_milvus_string(record.document_version)}"'

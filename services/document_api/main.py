@@ -11,6 +11,7 @@ Uvicorn entry point: ``main:app`` (see Dockerfile).
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
@@ -121,6 +122,10 @@ def create_app(
         yield
 
     app = FastAPI(title="new_DRUID document API", version="2.1.0", lifespan=lifespan)
+    from services.common.upload_limits import UploadBodyLimit
+    app.add_middleware(UploadBodyLimit, max_bytes=(settings.max_upload_mb + 1) * 1024 * 1024,
+                       concurrency=int(os.environ.get('UPLOAD_CONCURRENCY', '4')))
+
     _register_error_handlers(app)
     # The injected settings win over the process-global cached ones so tests
     # (and any embedder) control configuration deterministically.
@@ -134,6 +139,23 @@ def create_app(
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz():
+        from sqlalchemy import select
+        from services.catalog.models import ParserRevisionStats, IngestionAdmission
+        from routes.documents import UPLOAD_PARSER, UPLOAD_PARSER_REVISION
+        try:
+            with app.state.session_factory() as session:
+                session.execute(select(IngestionAdmission.version_id).limit(1))
+                baseline = session.scalar(select(ParserRevisionStats).where(
+                    ParserRevisionStats.parser == UPLOAD_PARSER,
+                    ParserRevisionStats.parser_revision == UPLOAD_PARSER_REVISION))
+                if baseline is None or baseline.sample_count < 1:
+                    return JSONResponse(status_code=503, content={"detail": "parser baseline not provisioned"})
+        except Exception:
+            return JSONResponse(status_code=503, content={"detail": "catalog unavailable or migrations pending"})
+        return {"status": "ready"}
 
     return app
 

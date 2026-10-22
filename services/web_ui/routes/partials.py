@@ -138,14 +138,18 @@ async def upload_session_create(
     if err:
         return JSONResponse(status_code=400, content={"detail": err})
     store = request.app.state.upload_sessions
-    session = store.create(
-        filename,
-        content_type,
-        total_chunks,
-        owner_user_id=identity.user_id,
-        owner_group_id=identity.group_id,
-        max_bytes=settings.max_upload_mb * 1024 * 1024,
-    )
+    try:
+        session = store.create(
+            filename,
+            content_type,
+            total_chunks,
+            owner_user_id=identity.user_id,
+            owner_group_id=identity.group_id,
+            max_bytes=settings.max_upload_mb * 1024 * 1024,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     log.info(
         "upload session %s started: file=%r chunks=%d group=%s",
         session.session_id,
@@ -184,7 +188,7 @@ async def upload_session_chunk(
     if isinstance(identity, JSONResponse):
         return identity
     settings = request.app.state.web_ui_settings
-    data = await chunk.read()
+    data = await chunk.read(settings.upload_chunk_mb * 1024 * 1024 + 1024 * 1024 + 1)
     if len(data) > settings.upload_chunk_mb * 1024 * 1024 + 1024 * 1024:
         return JSONResponse(status_code=400, content={"detail": "chunk too large"})
     store = request.app.state.upload_sessions
@@ -225,8 +229,7 @@ async def upload_session_complete(request: Request, session_id: str):
         return JSONResponse(
             status_code=400, content={"detail": "not all chunks received"}
         )
-    data = session.assemble()
-    err = _validate_upload(session.filename, len(data), settings.max_upload_mb)
+    err = _validate_upload(session.filename, session.current_bytes, settings.max_upload_mb)
     if err:
         store.pop(session_id)
         return JSONResponse(status_code=400, content={"detail": err})
@@ -234,13 +237,14 @@ async def upload_session_complete(request: Request, session_id: str):
         "upload session %s complete: file=%r bytes=%d group=%s",
         session_id,
         session.filename,
-        len(data),
+        session.current_bytes,
         identity.group_id,
     )
     try:
-        result = await api_for(identity, request).upload_document(
-            session.filename, data, session.content_type
-        )
+        with session.assemble_file() as data:
+            result = await api_for(identity, request).upload_document(
+                session.filename, data, session.content_type
+            )
     except ApiError as exc:
         status = 401 if exc.status_code == 401 else 502
         return JSONResponse(
