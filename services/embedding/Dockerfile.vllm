@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY services/embedding/requirements-vllm.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY services/__init__.py /app/services/__init__.py
+COPY services/embedding/ /app/services/embedding/
+# Prefix contract only; no heavyweight ingestion imports or model runtime.
+COPY services/ingestion/embeddings.py services/ingestion/config.py services/ingestion/chunker.py services/ingestion/tree.py services/ingestion/identifiers.py /app/services/ingestion/
+RUN useradd --system --uid 10001 --create-home embedding && chown -R embedding:embedding /app
+USER embedding
+EXPOSE 8003
+CMD ["uvicorn", "services.embedding.main:app", "--host", "0.0.0.0", "--port", "8003"]

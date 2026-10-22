@@ -1,11 +1,4 @@
-"""EmbeddingGemma 2 CPU serving logic (spec §8).
-
-The §8 prefix contract is owned by the ingestion sibling
-(``services/ingestion/embeddings.py``) and reused here via :mod:`reuse` —
-never duplicated. This module owns: input formatting through the sibling's
-contract, batching, CPU concurrency control, width/normalization guards, and
-the fail-closed backend lifecycle.
-"""
+"""Task-aware embedding adapter with local CPU and shared GPU backends."""
 
 from __future__ import annotations
 
@@ -19,6 +12,7 @@ import threading
 
 from . import reuse
 from .settings import EmbeddingServiceSettings
+from .vllm_backend import VllmEmbeddingBackend
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +25,7 @@ _TASK_TO_SIBLING_TASK = {
 
 
 class EmbeddingService:
-    """CPU-only EmbeddingGemma 2 service (§8, §2 GPU arbitration)."""
+    """EmbeddingGemma 2 contract adapter."""
 
     def __init__(
         self,
@@ -55,7 +49,9 @@ class EmbeddingService:
         if self.settings.backend == "mock":
             log.warning("embedding backend=mock: deterministic fake vectors, NOT semantic")
             return ing.MockEmbeddingBackend(dimension=self.settings.dimension)
-        # Production: sentence-transformers, CPU, pre-staged artifact only.
+        if self.settings.backend == "vllm":
+            return VllmEmbeddingBackend(self.settings)
+        # Explicit local CPU option; pre-staged artifacts only.
         st_settings = ing.EmbeddingSettings(
             model_id=self.settings.model_id,
             modality_config=self.settings.modality_config,
@@ -95,15 +91,15 @@ class EmbeddingService:
             )
 
     def _verify_vector(self, vector: list[float]) -> None:
-        """Fail-closed width + normalization check (first vector only)."""
-        if self._verified:
-            return
+        """Fail-closed width + normalization check for every vector."""
         expected = self.settings.dimension
         if len(vector) != expected:
             raise RuntimeError(
                 f"backend returned width {len(vector)}, expected {expected}: "
                 "refusing to silently mix widths (§8 migration rule)."
             )
+        if not all(math.isfinite(v) for v in vector):
+            raise RuntimeError("backend returned non-finite embedding")
         if self.settings.normalize:
             norm = math.sqrt(sum(v * v for v in vector))
             if abs(norm - 1.0) > 1e-3:
@@ -116,8 +112,13 @@ class EmbeddingService:
     def _encode_texts(self, formatted: list[str]) -> list[list[float]]:
         # sentence-transformers encode is run under a lock: CPU inference is
         # throughput-bound and the encoder is not guaranteed thread-safe.
-        with self._lock:
+        if self.settings.backend == "vllm":
             vectors = self._backend.embed_texts(formatted)
+        else:
+            with self._lock:
+                vectors = self._backend.embed_texts(formatted)
+        if len(vectors) != len(formatted):
+            raise RuntimeError("backend returned wrong vector count")
         for v in vectors:
             self._verify_vector(v)
         return vectors
@@ -192,6 +193,12 @@ class EmbeddingService:
         formatted = [self.format_query(text=q, task=task) for q in queries]
         return await self.embed_texts(formatted)
 
+    def _encode_images(self, images: list[bytes]) -> list[list[float]]:
+        if self.settings.backend == "vllm":
+            return self._backend.embed_images(images)
+        with self._lock:
+            return self._backend.embed_images(images)
+
     async def embed_image_bytes(self, image: bytes, *, page_label: str) -> dict:
         """Embed a page render into the unified 768-dim space (§8).
 
@@ -201,8 +208,7 @@ class EmbeddingService:
         if not image:
             raise ValueError("image bytes must be non-empty")
         async with self._semaphore:
-            with self._lock:
-                vectors = self._backend.embed_images([image])
+            vectors = await asyncio.to_thread(self._encode_images, [image])
         self._verify_vector(vectors[0])
         return {
             "vector": vectors[0],
@@ -211,6 +217,14 @@ class EmbeddingService:
             "metadata": {"modality": "page_image"},
             "text": page_label,
         }
+
+    def close(self) -> None:
+        if self.settings.backend == "vllm":
+            self._backend.close()
+
+    def check_ready(self) -> None:
+        if self.settings.backend == "vllm":
+            self._backend.check_ready()
 
     def describe(self) -> dict:
         """Model/card info for GET /health."""
@@ -222,7 +236,7 @@ class EmbeddingService:
             "backend": self.settings.backend,
             "model_path": self.settings.model_path or None,
             "model_loaded": self._verified,
-            "device": "cpu",
+            "device": "cuda:0 (remote vLLM)" if self.settings.backend == "vllm" else "cpu",
         }
 
 

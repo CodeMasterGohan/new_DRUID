@@ -1,0 +1,31 @@
+name: Shared GPU embedding contracts
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  embedding-adapter:
+    runs-on: ubuntu-latest
+    env:
+      EMBEDDING_VLLM_API_KEY: ci-test-only-not-a-secret
+      EMBEDDING_MODEL_DIR: /tmp/embeddinggemma-2
+      POSTGRES_PASSWORD: ci-test-only
+      RUSTFS_SECRET_KEY: ci-test-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install adapter and test dependencies
+        run: |
+          python -m pip install -r services/embedding/requirements-vllm.txt pytest pytest-asyncio jinja2==3.1.6
+          python -m pip check
+      - name: Run embedding contracts without model weights
+        run: python -m pytest services/embedding/tests -q
+      - name: Validate base plus shared GPU overlay
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env -f deploy/docker-compose.yml -f deploy/docker-compose.shared-embedding.yml config --quiet
+          docker compose -f deploy/shared-embedding/compose.yml config --quiet
+      - name: Build lightweight adapter image
+        run: docker build -f services/embedding/Dockerfile.vllm -t embedding-adapter:ci .

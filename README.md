@@ -1,5 +1,7 @@
 # new_DRUID — Enterprise Local-First RAG + MCP
 
+For a shared GPU embedding deployment on H200 GPU 0, see [shared EmbeddingGemma 2](deploy/shared-embedding.md).
+
 > Self-hosted, multi-tenant document knowledge system. Ingest documents,
 > review the uncertain pages, and search everything — through a web UI, a
 > REST API, or 8 MCP tools your AI agent can call directly.

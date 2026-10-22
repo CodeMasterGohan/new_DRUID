@@ -18,7 +18,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest==8.3.5 fastapi==0.115.8 httpx==0.28.1 \
             sqlalchemy==2.0.38 psycopg[binary]==3.2.9 \
-            pydantic==2.11.7 pydantic-settings==2.7.1 PyYAML==6.0.2
+            pydantic==2.11.7 pydantic-settings==2.7.1 PyYAML==6.0.2 pillow==13.0.0 jinja2==3.1.6
           python -m pip check
       - name: Compile source
         run: python -m compileall -q services tests skills/druid-natural-language/scripts skills/druid-management/scripts

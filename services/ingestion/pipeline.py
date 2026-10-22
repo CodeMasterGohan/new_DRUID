@@ -263,14 +263,26 @@ def build_production_deps() -> PipelineDeps:
     from .embeddings import SentenceTransformersGemmaBackend
     from .milvus_sink import MilvusIndexSink
 
-    required = ("EMBEDDING_MODEL_PATH", "MINILM_TOKENIZER_PATH",
+    from services.embedding.settings import EmbeddingServiceSettings
+    from services.embedding.vllm_backend import VllmEmbeddingBackend
+
+    embedding_settings = EmbeddingServiceSettings()
+    if embedding_settings.backend == "mock":
+        raise RuntimeError("mock embeddings are forbidden in production ingestion")
+    required = ("MINILM_TOKENIZER_PATH",
                 "RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY",
                 "RUSTFS_BUCKET", "MILVUS_URI")
+    if embedding_settings.backend == "st":
+        required += ("EMBEDDING_MODEL_PATH",)
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise RuntimeError("production ingestion missing: " + ", ".join(missing))
     return PipelineDeps(
-        embedding_backend=SentenceTransformersGemmaBackend(),
+        embedding_backend=(
+            VllmEmbeddingBackend(embedding_settings)
+            if embedding_settings.backend == "vllm"
+            else SentenceTransformersGemmaBackend()
+        ),
         index_sink=MilvusIndexSink(
             os.environ["MILVUS_URI"],
             os.environ.get("MILVUS_ALIAS", "project_knowledge_base"),
@@ -295,6 +307,7 @@ def run_ingestion_job(
     ``session_factory`` is a callable returning a SQLAlchemy Session; the
     default reads ``DATABASE_URL`` from the environment.
     """
+    owns_deps = deps is None
     deps = deps if deps is not None else build_production_deps()
     session = session_factory() if session_factory else _default_session()
     log.info("worker start: ingestion job=%s", job_id)
@@ -307,6 +320,8 @@ def run_ingestion_job(
             return _run(session, uuid.UUID(job_id), deps)
     finally:
         session.close()
+        if owns_deps and hasattr(deps.embedding_backend, "close"):
+            deps.embedding_backend.close()
 
 
 def _default_session():
@@ -636,6 +651,7 @@ def run_deletion_job(job_id: str, *, session_factory=None,
                      deps: PipelineDeps | None = None) -> str:
     """Retry-safe cleanup: commit invisibility before external side effects."""
     from services.catalog.work_lock import document_work_lock
+    owns_deps = deps is None
     deps = deps if deps is not None else build_production_deps()
     session = session_factory() if session_factory else _default_session()
     try:
@@ -676,6 +692,8 @@ def run_deletion_job(job_id: str, *, session_factory=None,
                 raise
     finally:
         session.close()
+        if owns_deps and hasattr(deps.embedding_backend, "close"):
+            deps.embedding_backend.close()
 
 
 def ensure_tenant(session, name: str) -> Tenant:

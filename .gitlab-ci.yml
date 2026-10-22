@@ -411,3 +411,12 @@ database-broker-contracts:
   script:
     - python -m pip install -r ci/requirements-test.txt
     - python -m pytest -q tests/test_production_integration.py
+
+# Shared GPU transport is tested without model weights or a GPU runner.
+test-shared-embedding:
+  stage: test
+  image: python:3.11-slim
+  script:
+    - python -m pip install -r services/embedding/requirements-vllm.txt pytest pytest-asyncio jinja2==3.1.6
+    - python -m pip check
+    - python -m pytest services/embedding/tests -q
