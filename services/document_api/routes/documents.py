@@ -40,6 +40,7 @@ from deps import (
     get_trusted_context,
 )
 from internal_auth import InternalAuthError
+from ingestion_admission import admit
 from job_queue import (
     DELETION_ENTRYPOINT,
     INGESTION_ENTRYPOINT,
@@ -87,21 +88,29 @@ UPLOAD_PARSER_REVISION = "router-v1"
 # ---------------------------------------------------------------------------
 
 
-async def _read_bounded(file: UploadFile, limit_bytes: int) -> bytes:
-    """Stream the upload, aborting past ``limit_bytes`` (→ HTTP 413)."""
-    chunks: list[bytes] = []
-    total = 0
+class ValidatedUpload:
+    def __init__(self, stream, size, checksum, header):
+        self.stream, self.size, self.checksum, self.header = stream, size, checksum, header
+    def __len__(self):
+        return self.size
+
+
+async def _read_bounded(file: UploadFile, limit_bytes: int) -> ValidatedUpload:
+    """Hash bounded chunks, reusing FastAPI's seekable spool for parsing/storage."""
+    digest = hashlib.sha256()
+    total, header = 0, b""
     while True:
         chunk = await file.read(_READ_CHUNK_SIZE)
         if not chunk:
             break
+        if not header:
+            header = chunk[:16]
         total += len(chunk)
         if total > limit_bytes:
-            raise UploadTooLargeError(
-                f"upload exceeds the {limit_bytes // (1024 * 1024)} MiB limit"
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
+            raise UploadTooLargeError("upload exceeds configured byte limit")
+        digest.update(chunk)
+    await file.seek(0)
+    return ValidatedUpload(file.file, total, digest.hexdigest(), header)
 
 
 def _safe_display_name(filename: str | None) -> str:
@@ -164,6 +173,7 @@ def _original_key(context: RequestContext, doc, version) -> str:
 
 def _mark_job_enqueued(job, session: Session) -> None:
     """Record enqueue confirmation in job.payload after enqueue_rq succeeds."""
+    session.refresh(job)
     existing_payload = getattr(job, "payload", None) or {}
     job.payload = {
         **existing_payload,
@@ -172,10 +182,25 @@ def _mark_job_enqueued(job, session: Session) -> None:
     session.commit()
 
 
+def _mark_enqueue_failed(repo, job, session, exc):
+    from sqlalchemy import update
+    from services.catalog.models import Job, DocumentVersion
+    changed = session.execute(update(Job).where(
+        Job.id == job.id, Job.state == IngestionState.UPLOADED
+    ).values(state=IngestionState.FAILED, error=f"enqueue failed: {exc}"))
+    if changed.rowcount and job.document_version_id is not None:
+        session.execute(update(DocumentVersion).where(
+            DocumentVersion.id == job.document_version_id,
+            DocumentVersion.status == IngestionState.UPLOADED
+        ).values(status=IngestionState.FAILED))
+    session.commit()
+    session.refresh(job)
+
+
 def _needs_reenqueue(job) -> bool:
     """True when a committed job never made it onto RQ (or failed enqueueing)."""
     payload = getattr(job, "payload", None) or {}
-    if job.state == IngestionState.FAILED:
+    if job.state in (IngestionState.FAILED, IngestionState.RETRY_PENDING, IngestionState.DELETING):
         return True
     if job.state == IngestionState.UPLOADED and not payload.get("enqueued_at"):
         return True
@@ -215,14 +240,14 @@ async def upload_document(
         data = await _read_bounded(file, max_bytes)
         if not data:
             raise UploadValidationError("uploaded file is empty")
-        mime = validate_mime(data, file.content_type)
-        page_count = count_pages(data, mime)
+        mime = validate_mime(data.header, file.content_type)
+        page_count = count_pages(data.stream, mime)
         if page_count > settings.max_pages_per_document:
             raise UploadValidationError(
                 f"document has {page_count} pages, exceeding the "
                 f"{settings.max_pages_per_document}-page limit"
             )
-        checksum = hashlib.sha256(data).hexdigest()
+        checksum = data.checksum
         display_name = _safe_display_name(file.filename)
 
         doc = repo.create_document(
@@ -234,8 +259,9 @@ async def upload_document(
             parser_revision=UPLOAD_PARSER_REVISION,
             page_count=page_count,
         )
+        admit(session, doc.tenant_id, version.id, page_count, settings.quota_ingest_pages_per_day)
         key = _original_key(context, doc, version)
-        store.put_bytes(key, data, content_type=mime)
+        store.put_file(key, data.stream, len(data), content_type=mime)
         stored_keys.append(key)
 
         job = create_ingestion_job(
@@ -250,6 +276,7 @@ async def upload_document(
         # Commit BEFORE the job becomes visible to workers: a worker that
         # races the commit must never see a missing job row.
         session.commit()
+        stored_keys.clear()
 
         try:
             enqueue_rq(
@@ -259,11 +286,7 @@ async def upload_document(
         except Exception as exc:
             # The job row exists but no worker will pick it up — park both
             # the job and version as FAILED so neither hangs in UPLOADED.
-            repo.update_job_state(
-                job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
-            )
-            repo.update_version_status(version.id, IngestionState.FAILED)
-            session.commit()
+            _mark_enqueue_failed(repo, job, session, exc)
             log.error(
                 "upload enqueue failed: job=%s document=%s group=%s request_id=%s: %s",
                 job.id,
@@ -470,6 +493,16 @@ async def upload_document_bytes(
     settings: DocumentApiSettings = Depends(get_settings),
     store: ObjectStore = Depends(get_object_store),
 ):
+    from services.catalog.work_lock import document_work_lock
+    try:
+        with document_work_lock(session, document_id):
+            return await _upload_bytes_locked(document_id, upload_ticket, file, context,
+                                              session, settings, store)
+    except ConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+async def _upload_bytes_locked(document_id, upload_ticket, file, context, session, settings, store):
     """Two-phase upload, step 2: redeem the ticket with the file bytes (§5).
 
     The ticket is single-use, TTL-bound, and pinned to the tenant, the
@@ -482,7 +515,7 @@ async def upload_document_bytes(
     """
     repo = CatalogRepository(session, context)
     try:
-        doc = repo.get_document(document_id)  # 404 unless owned by tenant
+        doc = repo.get_document_for_write(document_id)  # mutation authorization below
     except NotFoundError as exc:
         raise _to_http(exc)
 
@@ -494,6 +527,10 @@ async def upload_document_bytes(
             status_code=404,
             detail="no pending upload registration for this document",
         )
+    from sqlalchemy import select
+    from services.catalog.models import Job
+    job = session.scalar(select(Job).where(Job.id == job.id).with_for_update()
+                         .execution_options(populate_existing=True))
     payload = dict(job.payload or {})
     expected_ticket = payload.get("upload_ticket")
     if not isinstance(expected_ticket, str) or not hmac_compare(
@@ -554,13 +591,13 @@ async def upload_document_bytes(
                 f"uploaded {len(data)} bytes, declaration said "
                 f"{declared_size} bytes"
             )
-        checksum = hashlib.sha256(data).hexdigest()
+        checksum = data.checksum
         if checksum != declared_sha256:
             raise UploadValidationError(
                 "uploaded bytes do not match the declared SHA-256"
             )
-        mime = validate_mime(data, declared_mime)
-        page_count = count_pages(data, mime)
+        mime = validate_mime(data.header, declared_mime)
+        page_count = count_pages(data.stream, mime)
         if page_count > settings.max_pages_per_document:
             raise UploadValidationError(
                 f"document has {page_count} pages, exceeding the "
@@ -570,8 +607,9 @@ async def upload_document_bytes(
 
         if recovering_unenqueued and job.document_version_id is not None:
             version = repo.get_version(job.document_version_id)
+            admit(session, doc.tenant_id, version.id, page_count, settings.quota_ingest_pages_per_day)
             key = _original_key(context, doc, version)
-            store.put_bytes(key, data, content_type=mime)
+            store.put_file(key, data.stream, len(data), content_type=mime)
             repo.update_job_state(job.id, IngestionState.UPLOADED, error=None)
             repo.update_version_status(version.id, IngestionState.UPLOADED)
             session.commit()
@@ -582,8 +620,9 @@ async def upload_document_bytes(
                 parser_revision=UPLOAD_PARSER_REVISION,
                 page_count=page_count,
             )
+            admit(session, doc.tenant_id, version.id, page_count, settings.quota_ingest_pages_per_day)
             key = _original_key(context, doc, version)
-            store.put_bytes(key, data, content_type=mime)
+            store.put_file(key, data.stream, len(data), content_type=mime)
             stored_keys.append(key)
 
             # Promote the registration job into the ingestion job: attach the
@@ -601,6 +640,7 @@ async def upload_document_bytes(
                 "ticket_consumed_at": datetime.now(timezone.utc).isoformat(),
             }
             session.commit()
+        stored_keys.clear()
 
         try:
             enqueue_rq(
@@ -608,11 +648,7 @@ async def upload_document_bytes(
             )
             _mark_job_enqueued(job, session)
         except Exception as exc:
-            repo.update_job_state(
-                job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
-            )
-            repo.update_version_status(version.id, IngestionState.FAILED)
-            session.commit()
+            _mark_enqueue_failed(repo, job, session, exc)
             log.error(
                 "bytes upload enqueue failed: job=%s document=%s group=%s "
                 "request_id=%s: %s",
@@ -762,6 +798,15 @@ def delete_document(
     session: Session = Depends(get_session),
     settings: DocumentApiSettings = Depends(get_settings),
 ):
+    from services.catalog.work_lock import document_work_lock
+    try:
+        with document_work_lock(session, document_id):
+            return _delete_locked(document_id, repo, session, settings)
+    except ConflictError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+def _delete_locked(document_id, repo, session, settings):
     """Authorize in the catalog, then enqueue complete deletion (§12).
 
     The worker (``run_deletion_job``) removes Milvus chunks, originals,
@@ -769,7 +814,7 @@ def delete_document(
     DELETEs report the already-queued job instead of duplicating work.
     """
     try:
-        doc = repo.get_document(document_id)  # 404 unless owned by tenant
+        doc = repo.get_document_for_write(document_id, include_deleted=True)
     except NotFoundError as exc:
         raise _to_http(exc)
 
@@ -786,6 +831,8 @@ def delete_document(
         context.request_id,
     )
     try:
+        if repo.get_job_by_idempotency_key(f"delete-{doc.id.hex}") is not None:
+            raise ConflictError("deletion already exists")
         job = create_deletion_job(repo, document_id=doc.id,
                                   queue_name=settings.delete_queue)
         session.commit()
@@ -798,14 +845,13 @@ def delete_document(
                                 detail="deletion already queued for this document")
         if _needs_reenqueue(existing):
             try:
+                repo.update_job_state(existing.id, IngestionState.UPLOADED, error=None)
+                session.commit()
                 enqueue_rq(
                     settings.delete_queue,
                     DELETION_ENTRYPOINT,
                     existing,
                     settings.redis_url,
-                )
-                repo.update_job_state(
-                    existing.id, IngestionState.UPLOADED, error=None
                 )
                 _mark_job_enqueued(existing, session)
             except Exception as exc:

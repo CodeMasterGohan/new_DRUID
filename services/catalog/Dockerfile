@@ -11,4 +11,7 @@ COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
 COPY services/catalog/ /app/services/catalog/
 WORKDIR /app/services/catalog
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 CMD ["alembic", "upgrade", "head"]

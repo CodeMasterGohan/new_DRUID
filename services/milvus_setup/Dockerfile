@@ -10,4 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # imports, so it must run as milvus_setup.create_collection, not as a
 # top-level module.
 COPY services/milvus_setup/ /app/milvus_setup/
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 CMD ["python", "-m", "milvus_setup.create_collection"]

@@ -143,6 +143,9 @@ def test_quarantine_parks_review_required(job_setup, monkeypatch):
     state = run_ingestion_job(str(job_id), session_factory=maker,
                               deps=PipelineDeps())
     assert state == "REVIEW_REQUIRED"
+    monkeypatch.setattr(pipeline, "_parse_document", lambda *a, **k: pytest.fail("parked job reparsed"))
+    assert run_ingestion_job(str(job_id), session_factory=maker,
+                             deps=PipelineDeps()) == "REVIEW_REQUIRED"
     # Not retried, not failed — parked for a human.
     sess, repo = _fresh_repo(maker)
     assert repo.get_job(job_id).state == IngestionState.REVIEW_REQUIRED
@@ -247,3 +250,29 @@ def test_mixed_native_and_visual_trees_get_monotonic_chunk_orders_and_headings()
     orders = [c.chunk_order for c in chunks]
     assert len(orders) == len(set(orders))
     assert orders == list(range(len(orders)))
+
+
+def test_deletion_failure_keeps_tombstone_and_retry_completes(db):
+    from services.catalog.models import Document
+    maker, new_repo = db
+    session, repo = new_repo()
+    doc = repo.create_document(display_name='private.pdf', content_checksum='delete-failure')
+    job = repo.create_job(job_type='deletion', document_id=doc.id, idempotency_key='delete-failure')
+    did, jid = doc.id, job.id
+    session.commit()
+    session.close()
+    class BrokenStore(MemoryObjectStore):
+        def delete_prefix(self, prefix):
+            raise RuntimeError('object service unavailable')
+    sink = LoggingIndexSink()
+    with pytest.raises(RuntimeError, match='object service'):
+        run_deletion_job(str(jid), session_factory=maker,
+                         deps=PipelineDeps(index_sink=sink, object_store=BrokenStore()))
+    with maker() as session:
+        assert session.get(Document, did).is_deleted
+        assert session.get(Job, jid).state == IngestionState.FAILED
+    assert len(sink.deleted) == 1
+    deps = PipelineDeps(index_sink=sink)
+    assert run_deletion_job(str(jid), session_factory=maker, deps=deps) == 'DELETED'
+    assert run_deletion_job(str(jid), session_factory=maker, deps=deps) == 'DELETED'
+    assert len(sink.deleted) == 2  # terminal delivery is a no-op

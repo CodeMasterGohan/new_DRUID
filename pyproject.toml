@@ -15,8 +15,10 @@ strict = true
 warn_unused_ignores = true
 
 [tool.pytest.ini_options]
-testpaths = ["services"]
+testpaths = ["services", "tests"]
 python_files = ["test_*.py"]
 # Matches services/mcp_server's own config: async tests run without
 # explicit markers (its middleware/auth/provenance suites rely on this).
 asyncio_mode = "auto"
+
+asyncio_default_fixture_loop_scope = "function"

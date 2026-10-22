@@ -16,7 +16,9 @@ class FakeRepo:
             user_id=actor, group_id="engineering", roles=tuple(roles)
         )
         self.document = SimpleNamespace(id=uuid.uuid4(), created_by=uploader)
-    def get_document(self, document_id):
+    def get_job_by_idempotency_key(self, key):
+        return None
+    def get_document_for_write(self, document_id, **kwargs):
         assert document_id == self.document.id
         return self.document
 
@@ -29,12 +31,12 @@ def _call(repo, monkeypatch):
         ),
     )
     monkeypatch.setattr(documents_routes, "enqueue_rq", lambda *args, **kwargs: None)
-    session = SimpleNamespace(commit=lambda: None)
+    session = SimpleNamespace(commit=lambda: None, refresh=lambda job: None)
     settings = SimpleNamespace(
         druid_auth_mode="keycloak", delete_queue="delete",
         redis_url="redis://redis:6379/0",
     )
-    return documents_routes.delete_document(
+    return documents_routes._delete_locked(
         repo.document.id, repo=repo, session=session, settings=settings,
     )
 

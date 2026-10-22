@@ -27,13 +27,18 @@ class MilvusIndexSink(IndexSink):
     def index_chunks(self, records: list[dict]) -> int:
         if not records:
             return 0
-        result = self._client.upsert(collection_name=self._collection, data=records)
-        count = int(result.get("upsert_count", result.get("insert_count", -1)))
-        if count != len(records):
-            raise RuntimeError(
-                f"Milvus upsert count mismatch: {count} != {len(records)}"
-            )
-        return count
+        batch_size = int(os.environ.get("MILVUS_UPSERT_BATCH_SIZE", "256"))
+        if not 1 <= batch_size <= 4096:
+            raise ValueError("MILVUS_UPSERT_BATCH_SIZE must be between 1 and 4096")
+        total = 0
+        for offset in range(0, len(records), batch_size):
+            batch = records[offset:offset + batch_size]
+            result = self._client.upsert(collection_name=self._collection, data=batch)
+            count = int(result.get("upsert_count", result.get("insert_count", -1)))
+            if count != len(batch):
+                raise RuntimeError(f"Milvus upsert count mismatch: {count} != {len(batch)}")
+            total += count
+        return total
 
     def delete_document(self, document_id: str, group_id: str) -> int:
         if not document_id or not group_id:

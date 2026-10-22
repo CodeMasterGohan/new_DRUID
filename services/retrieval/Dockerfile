@@ -6,11 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONPATH=/app
 WORKDIR /app
 COPY services/retrieval/requirements.txt .
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 \
  && pip install --no-cache-dir -r requirements.txt
 COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
 COPY services/catalog/ /app/services/catalog/
 COPY services/retrieval/ /app/services/retrieval/
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 EXPOSE 8004
 CMD ["uvicorn", "services.retrieval.main:app", "--host", "0.0.0.0", "--port", "8004"]

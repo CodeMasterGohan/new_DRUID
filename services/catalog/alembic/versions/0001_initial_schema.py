@@ -17,7 +17,7 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-ingestion_state = sa.Enum(
+ingestion_state = postgresql.ENUM(
     "UPLOADED",
     "QUEUED",
     "PARSING",
@@ -31,6 +31,7 @@ ingestion_state = sa.Enum(
     "DELETING",
     "DELETED",
     name="ingestion_state",
+    create_type=False,  # Explicit creation below; do not recreate for each table.
 )
 
 

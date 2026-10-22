@@ -83,7 +83,9 @@ def count_pages(data: bytes, mime: str) -> int:
     except ImportError as exc:
         raise RuntimeError("pypdf is required for PDF page counting") from exc
     try:
-        reader = PdfReader(io.BytesIO(data))
+        stream = io.BytesIO(data) if isinstance(data, bytes) else data
+        stream.seek(0)
+        reader = PdfReader(stream)
         return len(reader.pages)
     except Exception as exc:
         raise UploadValidationError(

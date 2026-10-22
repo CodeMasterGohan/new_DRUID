@@ -80,7 +80,7 @@ async def forward_request(
         headers[name] = value
     headers.update(build_internal_headers(context, internal_secret))
 
-    body = await request.body()
+    body = request.stream() if request.headers.get("content-type", "").startswith("multipart/") else await request.body()
     started = time.monotonic()
     log.info(
         "forward start: %s %s → %s request_id=%s group=%s",
@@ -107,17 +107,10 @@ async def forward_request(
                     timeout=timeout_seconds,
                 )
             except RuntimeError:
-                # Event loop changed across test runs; recreate the pooled client.
+                # A streamed request cannot be safely replayed after partial forwarding.
                 global _SHARED_CLIENT
                 _SHARED_CLIENT = None
-                client = _get_shared_client()
-                upstream = await client.request(
-                    request.method,
-                    target,
-                    headers=headers,
-                    content=body,
-                    timeout=timeout_seconds,
-                )
+                raise
     except httpx.TimeoutException:
         log.warning(
             "forward timeout → 504: %s %s request_id=%s",

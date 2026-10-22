@@ -133,6 +133,10 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
     )
 
     app = FastAPI(title="new_DRUID gateway", version="0.1.0")
+    from services.common.upload_limits import UploadBodyLimit
+    app.add_middleware(UploadBodyLimit, max_bytes=(settings.max_upload_mb + 1) * 1024 * 1024,
+                       concurrency=int(os.environ.get('UPLOAD_CONCURRENCY', '4')))
+
     app.state.settings = settings
     app.state.quota_store = quota_store
     identity_sessions = None
@@ -241,43 +245,9 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
                     "detail": f"upload exceeds {quota_config.max_upload_mb} MB limit"
                 },
             )
-        # page_count may arrive as a form field or query param; it only
-        # sizes the quota reservation, never identity.
-        page_count = 1
-        raw_page_count = request.query_params.get("page_count")
-        if raw_page_count is None and request.headers.get(
-            "content-type", ""
-        ).startswith("multipart/form-data"):
-            form = await request.form()
-            raw_page_count = form.get("page_count")
-        if raw_page_count is not None:
-            try:
-                page_count = int(raw_page_count)
-            except (TypeError, ValueError):
-                log.warning(
-                    "upload rejected → 400: bad page_count=%r request_id=%s",
-                    raw_page_count,
-                    context.request_id,
-                )
-                return JSONResponse(
-                    status_code=400, content={"detail": "page_count must be an integer"}
-                )
-        if page_count < 1 or page_count > quota_config.max_pages_per_document:
-            log.warning(
-                "upload rejected → 400: page_count=%d out of range request_id=%s",
-                page_count,
-                context.request_id,
-            )
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "detail": "page_count must be between 1 and "
-                    f"{quota_config.max_pages_per_document}"
-                },
-            )
-        decision = quota_store.consume_ingestion_pages(context.group_id, page_count)
+        # Actual page admission is transactional in document_api after validation.
+        decision = quota_store.check_query(context.group_id)
         if not decision.allowed:
-            _log_quota_rejection(request, context, "ingestion", decision)
             return _quota_exceeded(decision.retry_after_seconds)
         return await proxy_module.forward_request(
             request,
@@ -305,11 +275,8 @@ def create_app(settings: GatewaySettings | None = None) -> FastAPI:
                 context.request_id,
             )
             return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
-        quota_kind, pages = _classify_mcp_call(body)
-        if quota_kind == "ingestion":
-            decision = quota_store.consume_ingestion_pages(context.group_id, pages)
-        else:
-            decision = quota_store.check_query(context.group_id)
+        quota_kind = "query"
+        decision = quota_store.check_query(context.group_id)
         if not decision.allowed:
             _log_quota_rejection(request, context, quota_kind, decision)
             return _quota_exceeded(decision.retry_after_seconds)

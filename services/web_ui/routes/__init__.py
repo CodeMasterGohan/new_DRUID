@@ -11,6 +11,20 @@ from fastapi.templating import Jinja2Templates
 from api_client import DruidApiClient
 from deps import Identity, NotAuthenticated, get_identity
 
+class CompatibleTemplates(Jinja2Templates):
+    """Keep the legacy name/context call shape while using Starlette's request-first API."""
+
+    def TemplateResponse(self, *args, **kwargs):
+        if args and isinstance(args[0], str):
+            name = args[0]
+            context = args[1] if len(args) > 1 else kwargs.pop("context", {})
+            request = context.get("request")
+            if request is None:
+                raise ValueError("template context must include the request")
+            return super().TemplateResponse(request, name, context, **kwargs)
+        return super().TemplateResponse(*args, **kwargs)
+
+
 templates: Jinja2Templates | None = None
 
 _ENRICH_CONCURRENCY = 8

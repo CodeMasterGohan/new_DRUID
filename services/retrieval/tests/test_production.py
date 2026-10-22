@@ -89,3 +89,27 @@ def test_milvus_maps_page_image_provenance():
     assert record.modality == "page_image"
     assert record.page_image_ref == "tenant-a/img2.png"
     assert record.metadata["chunk_order"] == 1
+
+
+def test_filter_batches_merge_global_top_k_and_keep_all_authorized_pairs(monkeypatch):
+    monkeypatch.setenv('MILVUS_FILTER_BATCH_SIZE', '1')
+    class Client:
+        filters = []
+        def search(self, **kwargs):
+            expr = kwargs['filter']
+            self.filters.append(expr)
+            i = len(self.filters)
+            return [[{'distance': float(i), 'entity': {
+                'chunk_id': str(i), 'document_id': f'd{i}', 'document_version': str(i),
+                'text': 'sample', 'metadata': {}}}]]
+    client = Client()
+    store = MilvusVectorStore('test', 'kb', client)
+    allowed = frozenset({('d1','1'), ('d2','2'), ('d3','3')})
+    result = store.dense_search([0.1], AuthPredicate('tenant', allowed), 2)
+    assert [r.record.chunk_id for r in result] == ['3','2']
+    assert [r.rank for r in result] == [1,2]
+    assert len(client.filters) == 3
+    for i, expr in enumerate(client.filters, 1):
+        assert 'group_id == "tenant"' in expr
+        assert f'document_id == "d{i}"' in expr
+        assert f'document_version == "{i}"' in expr

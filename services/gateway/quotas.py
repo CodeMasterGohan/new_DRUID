@@ -129,11 +129,12 @@ class RedisQuotaStore(QuotaStore):
     """Production quota store backed by Redis (atomic Lua scripts)."""
 
     _INGEST_LUA = """
-    local used = redis.call('INCRBY', KEYS[1], ARGV[1])
-    if used == tonumber(ARGV[1]) then redis.call('EXPIRE', KEYS[1], ARGV[2]) end
-    return used
+    local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+    local used = current + tonumber(ARGV[1])
+    if used > tonumber(ARGV[3]) then return {0, current} end
+    redis.call('SET', KEYS[1], used, 'EX', ARGV[2])
+    return {1, used}
     """
-    _INGEST_ROLLBACK_LUA = "redis.call('DECRBY', KEYS[1], ARGV[1])"
     _QUERY_LUA = """
     local key, now, window, limit = KEYS[1], tonumber(ARGV[1]), tonumber(ARGV[2]), tonumber(ARGV[3])
     redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
@@ -171,12 +172,9 @@ class RedisQuotaStore(QuotaStore):
         today = today or dt.date.today()
         limit = self.config.ingest_pages_per_day
         key = f"druid:quota:ingest:{tenant}:{today.isoformat()}"
-        used = int(
-            self.redis.evalsha(self._ingest_script(), 1, key, pages, 2 * 86400)
-        )
-        if used > limit:
-            # Roll back the rejected consumption so accounting stays exact.
-            self.redis.eval(self._INGEST_ROLLBACK_LUA, 1, key, pages)
+        allowed, used = self.redis.evalsha(self._ingest_script(), 1, key, pages, 2 * 86400, limit)
+        used = int(used)
+        if not allowed:
             return QuotaDecision(
                 allowed=False,
                 limit=limit,

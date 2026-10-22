@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     OMP_NUM_THREADS=8
 WORKDIR /app
 COPY services/embedding/requirements.txt .
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 \
  && pip install --no-cache-dir -r requirements.txt
 COPY services/__init__.py /app/services/__init__.py
 # §8 prefix contract lives in the ingestion sibling (single source of truth).
@@ -22,5 +22,8 @@ COPY services/ingestion/identifiers.py /app/services/ingestion/identifiers.py
 COPY services/embedding/ /app/services/embedding/
 # Model artifacts mount READ-ONLY at /models (host registry). Missing model
 # dir must fail startup loudly — never download at runtime.
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 EXPOSE 8003
 CMD ["uvicorn", "services.embedding.main:app", "--host", "0.0.0.0", "--port", "8003"]

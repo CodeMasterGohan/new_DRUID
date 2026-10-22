@@ -209,22 +209,22 @@ def admin_quotas(
 ):
     """Per-tenant quota usage vs configured defaults.
 
-    Usage is read from the same Redis counters the gateway enforces
-    (see :func:`_quota_keys`); limits come from this service's settings,
-    which mirror the gateway's ``QUOTA_*`` env vars. When the counter
-    backend is unreachable, usage is reported as ``null`` rather than a
-    misleading zero.
+    Ingestion usage comes from the transactional catalog admission ledger.
+    Query usage comes from the gateway's Redis counters; unavailable query
+    counters are reported as null. Limits mirror the QUOTA_* settings.
     """
     _require_admin(context)
-    today = dt.date.today()
+    today = dt.datetime.now(dt.timezone.utc).date()
     tenants: list[AdminTenantQuota] = []
     for name in repo.list_tenant_names():
         ingest_key, query_key = _quota_keys(name, today)
-        ingest_used: int | None = None
+        from sqlalchemy import select, func
+        from services.catalog.models import IngestionAdmission, Tenant
+        ingest_used = repo.session.scalar(select(func.coalesce(func.sum(IngestionAdmission.pages), 0))
+            .join(Tenant, Tenant.id == IngestionAdmission.tenant_id)
+            .where(Tenant.name == name, IngestionAdmission.quota_day == today))
         query_qps: int | None = None
         try:
-            raw = redis_client.get(ingest_key)
-            ingest_used = int(raw) if raw is not None else 0
             query_qps = int(redis_client.zcard(query_key) or 0)
         except Exception as exc:  # Redis down: report unknown, not zero
             log.warning(

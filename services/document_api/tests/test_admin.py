@@ -178,7 +178,15 @@ class TestAdminQuotas:
         app.dependency_overrides[get_redis_client] = lambda: FakeRedis(values)
         return TestClient(app)
 
-    def test_reports_usage_vs_limits(self, app, settings):
+    def test_reports_usage_vs_limits(self, app, settings, session_factory):
+        import uuid
+        from sqlalchemy import select
+        from services.catalog.models import IngestionAdmission, Tenant
+        with session_factory() as session:
+            tenant = session.scalar(select(Tenant).where(Tenant.name == "tenant-a"))
+            session.add(IngestionAdmission(version_id=uuid.uuid4(), tenant_id=tenant.id,
+                quota_day=dt.datetime.now(dt.timezone.utc).date(), pages=37))
+            session.commit()
         today = dt.date.today()
         ingest_key, query_key = _quota_keys("tenant-a", today)
         values = {ingest_key: "37", query_key: 4}
@@ -208,7 +216,7 @@ class TestAdminQuotas:
             )
         assert resp.status_code == 200, resp.text
         for t in resp.json()["tenants"]:
-            assert t["ingest_pages_used"] is None
+            assert t["ingest_pages_used"] == 0  # SQL accounting remains available
             assert t["query_qps"] is None
             # Limits still reported — they come from settings, not Redis.
             assert t["ingest_pages_limit"] == 1000

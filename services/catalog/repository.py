@@ -135,14 +135,24 @@ class CatalogRepository:
         self.session.flush()
         return doc
 
-    def get_document(self, document_id: uuid.UUID) -> Document:
+    def get_document(self, document_id: uuid.UUID, *, include_deleted=False) -> Document:
+        """Read-authorized lookup; restricted documents are indistinguishable from missing."""
+        doc = self.session.scalar(select(Document).where(
+            Document.id == document_id, Document.tenant_id == self._tenant_id(),
+            True if include_deleted else Document.is_deleted.is_(False), self._document_acl_read_predicate(),
+        ))
+        if doc is None:
+            raise NotFoundError("document not found")
+        return doc
+
+    def get_document_for_write(self, document_id: uuid.UUID, *, include_deleted=False) -> Document:
         """Fetch a document by ID, resolved within the authenticated tenant."""
         doc = (
             self.session.execute(
                 select(Document).where(
                     Document.id == document_id,
                     Document.tenant_id == self._tenant_id(),
-                    Document.is_deleted.is_(False),
+                    True if include_deleted else Document.is_deleted.is_(False),
                 # tenant-scoped active document
                 )
             )
@@ -170,7 +180,7 @@ class CatalogRepository:
             .where(
                 Document.tenant_id == self._tenant_id(),
                 Document.is_deleted.is_(False),
-                # tenant-scoped active document
+                self._document_acl_read_predicate(),
             )
             .order_by(Document.created_at.desc())
             .limit(limit)
@@ -197,7 +207,7 @@ class CatalogRepository:
         Physical deletion (Milvus chunks, objects, caches) is performed by
         the deletion job; this only removes catalog visibility (§12).
         """
-        doc = self.get_document(document_id)
+        doc = self.get_document_for_write(document_id)
         doc.is_deleted = True
         doc.deleted_at = dt.datetime.now(dt.timezone.utc)
         self.session.flush()
@@ -220,7 +230,7 @@ class CatalogRepository:
         parser_revision: str,
         page_count: int | None = None,
     ) -> DocumentVersion:
-        doc = self.get_document(document_id)  # ownership check
+        doc = self.get_document_for_write(document_id)  # ownership check
         existing = (
             self.session.execute(
                 select(DocumentVersion.version_number)
@@ -385,7 +395,7 @@ class CatalogRepository:
         """
         tenant_id = self._tenant_id()
         if document_id is not None:
-            self.get_document(document_id)  # ownership check
+            self.get_document_for_write(document_id)  # ownership check
         # Idempotency pre-check: a duplicate key raises ConflictError without
         # touching the session's transaction state. The UNIQUE constraint
         # remains as a backstop; in the (unlikely) race that trips it, the
@@ -447,8 +457,7 @@ class CatalogRepository:
     ) -> Job:
         job = self.get_job(job_id)
         job.state = state
-        if error is not None:
-            job.error = error
+        job.error = error
         self.session.flush()
         return job
 
@@ -575,6 +584,7 @@ class CatalogRepository:
         )
         if item is None:
             raise NotFoundError(f"quarantine item {item_id} not found")
+        self.get_document(item.document_id)
         return item
 
     def list_quarantine(
@@ -582,7 +592,10 @@ class CatalogRepository:
     ) -> list[ReviewQuarantineItem]:
         stmt = (
             select(ReviewQuarantineItem)
+            .join(Document, Document.id == ReviewQuarantineItem.document_id)
             .where(
+                Document.is_deleted.is_(False),
+                self._document_acl_read_predicate(),
                 ReviewQuarantineItem.tenant_id == self._tenant_id(),
                 ReviewQuarantineItem.status == status,
             )
@@ -650,7 +663,7 @@ class CatalogRepository:
         principal_id: str,
         permission: str,
     ) -> DocumentACL:
-        doc = self.get_document(document_id)
+        doc = self.get_document_for_write(document_id)
         duplicate = (
             self.session.execute(
                 select(DocumentACL.id).where(
@@ -681,7 +694,7 @@ class CatalogRepository:
         tenant may read. With rows present, the caller's user id or one of
         their roles must hold the permission.
         """
-        doc = self.get_document(document_id)  # tenant scoping first
+        doc = self.get_document_for_write(document_id)  # tenant scoping first
         rows = list(
             self.session.execute(
                 select(DocumentACL).where(DocumentACL.document_id == doc.id)

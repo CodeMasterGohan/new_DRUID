@@ -112,3 +112,59 @@ jobs:
           cp .env.example .env
           CI_IMAGE_PREFIX=registry.example.invalid/org/project CI_IMAGE_TAG=abcdef123456 docker compose --env-file .env -f deploy/docker-compose.yml -f .gitlab/images.compose.yml config --quiet
 
+
+  complete-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r ci/requirements-test.txt
+      - run: python -m pip check
+      # Flat service imports require separate processes for the Web UI.
+      - run: python -m pytest -q services tests --ignore=services/web_ui/tests
+      - run: cd services/web_ui && python -m pytest -q tests
+  database-broker-contracts:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_PASSWORD: druid-test-only
+          POSTGRES_DB: druid_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4.2-alpine
+        ports: ['6379:6379']
+    env:
+      DRUID_TEST_DATABASE_URL: postgresql+psycopg://postgres:druid-test-only@localhost:5432/druid_test
+      DRUID_TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r ci/requirements-test.txt
+      - run: python -m pytest -q tests/test_production_integration.py
+  security-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pip-audit==2.7.3
+      - name: Audit pinned service dependencies
+        run: |
+          result=0
+          for req in services/*/requirements.txt; do
+            python -m pip_audit -r "$req" || result=1
+          done
+          exit "$result"
+      - name: Source vulnerability, secret and configuration gate
+        run: |
+          docker run --rm -v "$PWD:/src" aquasec/trivy:0.58.2 fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 1 /src

@@ -14,7 +14,7 @@ COPY services/ingestion/requirements.txt .
 # torch from the CPU index FIRST (mirrors the embedding service): the
 # default PyPI torch wheel bundles CUDA and must never land here (§2 GPU
 # arbitration — the H200 belongs to vLLM/olmOCR).
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.6.0 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 \
  && pip install --no-cache-dir -r requirements.txt
 # Full services tree (not a flat copy): the RQ worker must import the
 # dotted-path entry points `services.ingestion.pipeline.run_ingestion_job`
@@ -28,4 +28,7 @@ COPY services/ingestion/ /app/services/ingestion/
 # Models mount read-only from the host artifact registry (see .env.example).
 # Shell form (NOT exec form): Docker does not expand ${...} in exec-form
 # CMD, so the exec form would hand rq the literal string "${REDIS_URL}".
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 CMD rq worker --url "${REDIS_URL}" ingest delete
