@@ -9,4 +9,7 @@ COPY services/artifacts/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY services/artifacts/ /app/
 ENTRYPOINT ["python", "-m", "src.cli"]
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 CMD ["--help"]

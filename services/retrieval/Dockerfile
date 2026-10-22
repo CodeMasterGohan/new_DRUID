@@ -12,5 +12,8 @@ COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
 COPY services/catalog/ /app/services/catalog/
 COPY services/retrieval/ /app/services/retrieval/
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 EXPOSE 8004
 CMD ["uvicorn", "services.retrieval.main:app", "--host", "0.0.0.0", "--port", "8004"]

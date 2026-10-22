@@ -22,5 +22,8 @@ COPY services/ingestion/identifiers.py /app/services/ingestion/identifiers.py
 COPY services/embedding/ /app/services/embedding/
 # Model artifacts mount READ-ONLY at /models (host registry). Missing model
 # dir must fail startup loudly — never download at runtime.
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 EXPOSE 8003
 CMD ["uvicorn", "services.embedding.main:app", "--host", "0.0.0.0", "--port", "8003"]

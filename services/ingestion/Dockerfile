@@ -28,4 +28,7 @@ COPY services/ingestion/ /app/services/ingestion/
 # Models mount read-only from the host artifact registry (see .env.example).
 # Shell form (NOT exec form): Docker does not expand ${...} in exec-form
 # CMD, so the exec form would hand rq the literal string "${REDIS_URL}".
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 CMD rq worker --url "${REDIS_URL}" ingest delete

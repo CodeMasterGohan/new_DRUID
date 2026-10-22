@@ -11,5 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY services/web_ui/ /app/
 COPY services/common/ /app/services/common/
 COPY services/__init__.py /app/services/__init__.py
+RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
+USER druid
+
 EXPOSE 8005
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
