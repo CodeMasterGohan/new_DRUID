@@ -25,6 +25,10 @@ COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
 COPY services/catalog/ /app/services/catalog/
 COPY services/ingestion/ /app/services/ingestion/
+# Shared GPU embedding client; no model inference runs in this process.
+COPY services/embedding/__init__.py /app/services/embedding/__init__.py
+COPY services/embedding/settings.py /app/services/embedding/settings.py
+COPY services/embedding/vllm_backend.py /app/services/embedding/vllm_backend.py
 # Models mount read-only from the host artifact registry (see .env.example).
 # Shell form (NOT exec form): Docker does not expand ${...} in exec-form
 # CMD, so the exec form would hand rq the literal string "${REDIS_URL}".

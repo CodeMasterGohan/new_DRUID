@@ -1,0 +1,69 @@
+# Start ONCE for both apps, separately from their Compose projects.
+name: shared-embedding
+services:
+  vllm-embedding:
+    image: ${EMBEDDING_VLLM_IMAGE:-vllm/vllm-openai:v0.32.0}
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+      VLLM_API_KEY: ${EMBEDDING_VLLM_API_KEY:?Set EMBEDDING_VLLM_API_KEY}
+    volumes:
+      - ${EMBEDDING_MODEL_DIR:?Set the staged EmbeddingGemma 2 directory}:/models/embeddinggemma-2:ro
+      - ./image-template.jinja:/config/image-template.jinja:ro
+    command:
+      - --model
+      - /models/embeddinggemma-2
+      - --served-model-name
+      - google/embeddinggemma-2
+      - --runner
+      - pooling
+      - --dtype
+      - bfloat16
+      - --tensor-parallel-size
+      - "1"
+      - --max-model-len
+      - "8192"
+      - --max-num-seqs
+      - ${EMBEDDING_VLLM_MAX_NUM_SEQS:-64}
+      - --max-num-batched-tokens
+      - ${EMBEDDING_VLLM_MAX_BATCHED_TOKENS:-32768}
+      - --gpu-memory-utilization
+      - ${EMBEDDING_VLLM_GPU_MEMORY_UTILIZATION:-0.10}
+      # Bidirectional embeddings require the whole input, not decode/KV tuning.
+      - --no-enable-chunked-prefill
+      - --no-enable-prefix-caching
+      - --enforce-eager
+      - --limit-mm-per-prompt
+      - '{"image":1,"audio":0,"video":0}'
+      - --chat-template
+      - /config/image-template.jinja
+      - --chat-template-content-format
+      - openai
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    shm_size: 4gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+    networks:
+      embedding-net:
+        aliases: [vllm-embedding]
+    restart: unless-stopped
+networks:
+  embedding-net:
+    name: shared-embedding-net
+    external: true

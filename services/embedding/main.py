@@ -1,19 +1,8 @@
-"""EmbeddingGemma 2 CPU service — FastAPI app (spec §8).
-
-CPU ONLY (§2 GPU arbitration): the H200 belongs to vLLM/olmOCR. This
-service must never request GPU resources.
-
-Endpoints:
-  POST /embed       — embed texts with the §8 contractual task prefixes
-  POST /embed_image — embed a page render into the unified vector space
-  GET  /health      — model/card status (fail-closed)
-
-Startup fails fast when the pre-staged artifact is missing or invalid —
-production services never download at runtime (§3).
-"""
+"""Embedding API with explicit CPU or shared GPU inference."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -81,7 +70,7 @@ async def lifespan(app: FastAPI):
     global service
     settings = EmbeddingServiceSettings()
     log.info(
-        "starting embedding service: model=%s modality=%s dim=%d backend=%s device=cpu",
+        "starting embedding service: model=%s modality=%s dim=%d backend=%s",
         settings.model_id,
         settings.modality_config,
         settings.dimension,
@@ -93,11 +82,17 @@ async def lifespan(app: FastAPI):
         # fail startup loudly instead of on first request (§3).
         await service.embed_texts(["druid warmup"])
     except Exception:
+        if service is not None:
+            service.close()
+            service = None
         log.critical("embedding service failed startup — refusing to run degraded", exc_info=True)
         raise
     log.info("embedding service ready")
-    yield
-    service = None
+    try:
+        yield
+    finally:
+        service.close()
+        service = None
 
 
 app = FastAPI(title="new_DRUID embedding service", version="2.1.0", lifespan=lifespan)
@@ -110,9 +105,13 @@ def _svc() -> EmbeddingService:
 
 
 @app.get("/health")
-def health() -> dict:
+async def health() -> dict:
     if service is None:
         raise HTTPException(status_code=503, detail="embedding backend not ready")
+    try:
+        await asyncio.to_thread(service.check_ready)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="shared embedding backend unavailable") from exc
     info = service.describe()
     info["status"] = "ok" if info["model_loaded"] else "degraded"
     return info

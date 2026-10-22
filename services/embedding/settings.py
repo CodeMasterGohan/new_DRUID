@@ -1,12 +1,8 @@
-"""Embedding service settings (spec §2, §8).
-
-CPU-only by design: the H200 belongs to vLLM/olmOCR (§2 GPU arbitration).
-This service must never request GPU resources.
-"""
+"""Embedding service settings: local CPU or shared GPU vLLM inference."""
 
 from __future__ import annotations
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Matryoshka widths permitted only after M1 validation (§8). 768 is the
@@ -40,10 +36,14 @@ class EmbeddingServiceSettings(BaseSettings):
 
     normalize: bool = Field(default=True)
 
-    # "st" (sentence-transformers production backend) or "mock" (tests/dev).
+    # "vllm" uses shared GPU inference; "st" retains explicit local CPU support.
     backend: str = Field(default="st")
 
-    # CPU serving knobs.
+    vllm_base_url: AnyHttpUrl = Field(default="http://vllm-embedding:8000/v1")
+    vllm_api_key: SecretStr | None = Field(default=None)
+    vllm_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+
+    # Client batching and bounded in-flight requests.
     batch_size: int = Field(default=32, ge=1, le=256)
     max_concurrency: int = Field(default=4, ge=1, le=32)
     max_input_chars: int = Field(default=32768, ge=1024)
@@ -72,6 +72,6 @@ class EmbeddingServiceSettings(BaseSettings):
     @field_validator("backend")
     @classmethod
     def _validate_backend(cls, v: str) -> str:
-        if v not in ("st", "mock"):
-            raise ValueError(f"unknown backend {v!r}: expected 'st' or 'mock'.")
+        if v not in ("st", "mock", "vllm"):
+            raise ValueError(f"unknown backend {v!r}: expected 'st', 'mock', or 'vllm'.")
         return v

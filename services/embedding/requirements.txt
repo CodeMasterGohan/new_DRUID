@@ -18,3 +18,6 @@ uvicorn[standard]==0.34.0
 pydantic==2.11.7
 pydantic-settings==2.7.1
 structlog==25.1.0
+
+# Shared GPU backend transport (also imported by the local CPU image).
+httpx==0.28.1

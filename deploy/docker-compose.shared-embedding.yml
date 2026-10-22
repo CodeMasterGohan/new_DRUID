@@ -1,0 +1,28 @@
+# Overlay: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.shared-embedding.yml ...
+services:
+  embedding:
+    build:
+      dockerfile: services/embedding/Dockerfile.vllm
+    environment:
+      EMBEDDING_BACKEND: vllm
+      EMBEDDING_VLLM_BASE_URL: http://vllm-embedding:8000/v1
+      EMBEDDING_VLLM_API_KEY: ${EMBEDDING_VLLM_API_KEY:?Set EMBEDDING_VLLM_API_KEY}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
+      EMBEDDING_MAX_CONCURRENCY: ${EMBEDDING_MAX_CONCURRENCY:-8}
+    networks:
+      - default
+      - shared-embedding-net
+  ingestion:
+    environment:
+      EMBEDDING_BACKEND: vllm
+      EMBEDDING_VLLM_BASE_URL: http://vllm-embedding:8000/v1
+      EMBEDDING_VLLM_API_KEY: ${EMBEDDING_VLLM_API_KEY:?Set EMBEDDING_VLLM_API_KEY}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
+    networks:
+      - default
+      - druid-net
+      - shared-embedding-net
+networks:
+  shared-embedding-net:
+    name: shared-embedding-net
+    external: true
