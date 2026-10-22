@@ -16,16 +16,31 @@ from dataclasses import dataclass, field
 
 
 # Provisional default patterns (name → regex). Word-boundary anchored to
-# avoid substring noise.
+# avoid substring noise. Kept aligned with services.retrieval.identifiers so
+# ingested identifiers and query-time identifier tokens match symmetrically.
 DEFAULT_PATTERNS: dict[str, str] = {
-    # Honda-style part numbers: 23441-HM8-B60
-    "part_number": r"\b\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}\b",
+    # UUIDs
+    "uuid": (
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+    ),
+    # Honda-style part numbers (23441-HM8-B60) and dashed numeric codes
+    "part_number": r"\b(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d[\w]*-\w+-\w+)\b",
     # Invoice / order numbers: INV-2024-00123, PO#45821, Order 99213
-    "invoice_number": r"\b(?:INV|PO|ORDER)[-#\s]*[A-Z0-9][A-Z0-9\-/]{3,20}\b",
-    # Clause / section references: § 4.2, Section 12.3(a)
-    "clause_ref": r"(?:§\s*\d+(?:\.\d+)*(?:\([a-z]\))?|\bSection\s+\d+(?:\.\d+)*(?:\([a-z]\))?)",
-    # Document numbers: DOC-ABC-1234
+    "invoice_number": r"\b(?:INV|PO|ORDER)[-#\s]*[A-Z0-9][A-Z0-9\-/]{2,20}\b",
+    # Clause / section / article references: § 4.2, Section 12.3(a), clause 7
+    "clause_ref": (
+        r"(?:§\s*\d+(?:\.\d+)*(?:\([a-z]\))?"
+        r"|\b(?:Section|Clause|Article)\s+\d+(?:\.\d+)*(?:\([a-z]\))?)"
+    ),
+    # Multi-segment document numbers: DOC-ABC-1234, CVE-2024-12345
     "document_number": r"\b[A-Z]{2,6}-[A-Z0-9]{2,8}-\d{2,8}\b",
+    # Prefixed alphanumeric / error codes: AB-1234, ERR_404, SN-9912
+    "prefixed_code": r"\b[A-Z]{2,8}[-_]\d[\w.-]*\b",
+    # Version / release tags: v1.2.3, v1.2.3-rc1
+    "version_tag": r"\bv\d+\.\d+(?:\.\d+)*(?:-[A-Za-z0-9.]+)?\b",
+    # Long digit runs (serial / account / order numbers)
+    "serial_digits": r"\b\d{6,}\b",
 }
 
 
@@ -48,14 +63,20 @@ class IdentifierExtractor:
         """Return deduplicated identifiers in order of first appearance."""
         found: list[str] = []
         seen: set[str] = set()
-        # Collect (position, value) across all patterns, then sort.
-        hits: list[tuple[int, str]] = []
+        # Collect (start, -length, value) across all patterns so longer spans
+        # at the same start offset win over shorter sub-matches.
+        hits: list[tuple[int, int, str]] = []
         for pattern in self._compiled.values():
             for match in pattern.finditer(text):
                 value = match.group(0).strip()
-                hits.append((match.start(), value))
+                hits.append((match.start(), -len(value), value))
         hits.sort()
-        for _, value in hits:
+        last_end = -1
+        for start, neg_len, value in hits:
+            end = start - neg_len
+            if start < last_end:
+                continue
+            last_end = end
             key = value.upper()
             if key not in seen:
                 seen.add(key)

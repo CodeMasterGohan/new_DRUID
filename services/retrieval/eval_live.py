@@ -119,8 +119,13 @@ def evaluate(cases: list[dict], retrieve, k: int = 8) -> dict:
 def client(url: str, user: str, group: str, secret: str, timeout: float = 30.0):
     if not (url and user and group and secret):
         raise ValueError("url, user, group, and secret are required")
+    endpoint = url.rstrip("/") + "/search"
+    transport: httpx.Client | None = None
 
     def retrieve(query: str) -> dict:
+        nonlocal transport
+        if transport is None:
+            transport = httpx.Client(timeout=timeout)
         now = str(time.time())
         request_id = uuid.uuid4().hex
         canonical = f"{user}|{group}|reader|{request_id}|{now}"
@@ -132,10 +137,9 @@ def client(url: str, user: str, group: str, secret: str, timeout: float = 30.0):
             "X-Druid-Timestamp": now,
             "X-Druid-Signature": digest,
         }
-        with httpx.Client(timeout=timeout) as transport:
-            response = transport.post(url.rstrip("/") + "/search", json={"query": query}, headers=headers)
-            response.raise_for_status()
-            return response.json()
+        response = transport.post(endpoint, json={"query": query}, headers=headers)
+        response.raise_for_status()
+        return response.json()
     return retrieve
 
 

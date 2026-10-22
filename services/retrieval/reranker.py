@@ -23,7 +23,9 @@ def truncate_to_budget(text: str, max_chars: int = MAX_PASSAGE_CHARS) -> str:
     """Hard-truncate a passage so query + passage fits the reranker window."""
     if len(text) <= max_chars:
         return text
-    return text[:max_chars].rsplit(" ", 1)[0]
+    prefix = text[:max_chars]
+    cut = prefix.rsplit(" ", 1)[0]
+    return cut if cut.strip() else prefix
 
 
 def rerank_text_candidates(
@@ -35,17 +37,22 @@ def rerank_text_candidates(
 
     Only ``modality == "text"`` candidates are scored. Page-image records
     are excluded here by construction — the caller merges them back by
-    fusion score.
+    fusion score. Identical truncated passages are deduplicated before
+    invoking the CPU cross-encoder so duplicate chunks are scored once.
     """
     text_only = [c for c in candidates if c.record.modality == "text"]
     if not text_only:
         return []
     passages = [truncate_to_budget(c.record.text) for c in text_only]
-    scores = reranker.score(query, passages)
-    if len(scores) != len(text_only):
+    unique_passages = list(dict.fromkeys(passages))
+    unique_scores = reranker.score(query, unique_passages)
+    if len(unique_scores) != len(unique_passages):
         raise ValueError(
-            f"reranker returned {len(scores)} scores for {len(text_only)} passages"
+            f"reranker returned {len(unique_scores)} scores for "
+            f"{len(unique_passages)} passages"
         )
+    score_by_passage = dict(zip(unique_passages, unique_scores))
+    scores = [score_by_passage[p] for p in passages]
     ranked = sorted(
         zip(text_only, scores), key=lambda pair: pair[1], reverse=True
     )

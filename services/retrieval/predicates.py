@@ -7,7 +7,7 @@ application repository layer, never in Milvus partition behavior.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _escape_milvus_string(value: str) -> str:
@@ -30,6 +30,9 @@ class AuthPredicate:
 
     group_id: str
     allowed_versions: frozenset[tuple[str, str]] | None
+    _cached_expr: str | None = field(
+        default=None, init=False, repr=False, compare=False, hash=False
+    )
 
     def to_milvus_expr(self) -> str:
         """Render as a Milvus filter expression.
@@ -37,6 +40,8 @@ class AuthPredicate:
         Raises if the allowed set is empty — an empty set must short-circuit
         the search in the service layer instead of hitting the store.
         """
+        if self._cached_expr is not None:
+            return self._cached_expr
         if self.allowed_versions is not None and not self.allowed_versions:
             raise ValueError(
                 "empty allowed_versions: the service must return [] "
@@ -45,10 +50,25 @@ class AuthPredicate:
         group = _escape_milvus_string(self.group_id)
         expr = f'group_id == "{group}"'
         if self.allowed_versions is not None:
-            clauses = []
-            for doc_id, doc_version in sorted(self.allowed_versions):
-                d = _escape_milvus_string(doc_id)
+            by_version: dict[str, list[str]] = {}
+            for doc_id, doc_version in self.allowed_versions:
+                by_version.setdefault(doc_version, []).append(doc_id)
+            clauses: list[str] = []
+            for doc_version in sorted(by_version):
                 v = _escape_milvus_string(doc_version)
-                clauses.append(f'(document_id == "{d}" and document_version == "{v}")')
+                doc_ids = sorted(by_version[doc_version])
+                if len(doc_ids) == 1:
+                    d = _escape_milvus_string(doc_ids[0])
+                    clauses.append(
+                        f'(document_id == "{d}" and document_version == "{v}")'
+                    )
+                else:
+                    id_list = ", ".join(
+                        f'"{_escape_milvus_string(d)}"' for d in doc_ids
+                    )
+                    clauses.append(
+                        f'(document_version == "{v}" and document_id in [{id_list}])'
+                    )
             expr += " and (" + " or ".join(clauses) + ")"
+        object.__setattr__(self, "_cached_expr", expr)
         return expr

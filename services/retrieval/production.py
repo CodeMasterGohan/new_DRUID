@@ -5,8 +5,10 @@ Never widen the scope after a backend error, and never return unscoped data.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import json
 import os
+import threading
 from typing import Sequence
 
 import httpx
@@ -21,6 +23,8 @@ class HttpEmbeddingClient(EmbeddingClient):
 
     Embedding service owns the real query prefix. Strip only the three known
     prefixes, then send raw query plus task, preventing double-prefixing.
+    Reuses a persistent httpx.Client for TCP connection pooling and caches
+    recent query vectors in a bounded thread-safe LRU cache.
     """
 
     _PREFIXES = {
@@ -29,35 +33,72 @@ class HttpEmbeddingClient(EmbeddingClient):
         "task: search result | query: ": "search_result",
     }
 
-    def __init__(self, url: str, dimension: int = 768, timeout: float = 30.0):
+    def __init__(
+        self,
+        url: str,
+        dimension: int = 768,
+        timeout: float = 30.0,
+        cache_size: int = 256,
+    ):
         if not url or dimension < 1:
             raise ValueError("embedding URL and dimension are required")
         self._url = url.rstrip("/") + "/embed"
         self._dimension = dimension
         self._timeout = timeout
+        self._cache_size = max(0, cache_size)
+        self._cache: OrderedDict[tuple[str, str], tuple[float, ...]] = OrderedDict()
+        self._lock = threading.Lock()
+        self._client: httpx.Client | None = None
 
     @property
     def dimension(self) -> int:
         return self._dimension
 
+    def _get_client(self) -> httpx.Client:
+        if self._client is None:
+            self._client = httpx.Client(timeout=self._timeout)
+        return self._client
+
+    def close(self) -> None:
+        with self._lock:
+            if self._client is not None:
+                self._client.close()
+                self._client = None
+
     def embed_query(self, prompted_text: str) -> list[float]:
         prefix = next((p for p in self._PREFIXES if prompted_text.startswith(p)), None)
         if prefix is None:
             raise ValueError("unexpected query prefix; refusing to embed with wrong task")
+        task = self._PREFIXES[prefix]
         query = prompted_text[len(prefix):]
-        with httpx.Client(timeout=self._timeout) as client:
-            response = client.post(self._url, json={
-                "queries": [query], "task": self._PREFIXES[prefix],
-            })
-            response.raise_for_status()
-            data = response.json()
+        cache_key = (task, query)
+        if self._cache_size > 0:
+            with self._lock:
+                cached = self._cache.get(cache_key)
+                if cached is not None:
+                    self._cache.move_to_end(cache_key)
+                    return list(cached)
+
+        client = self._get_client()
+        response = client.post(self._url, json={
+            "queries": [query], "task": task,
+        })
+        response.raise_for_status()
+        data = response.json()
         vectors = data.get("vectors", [])
         if data.get("dimension") != self.dimension or len(vectors) != 1:
             raise ValueError("embedding endpoint violated vector dimension/count contract")
         vector = vectors[0]
         if not isinstance(vector, list) or len(vector) != self.dimension:
             raise ValueError("embedding response has invalid width")
-        return [float(v) for v in vector]
+        result = [float(v) for v in vector]
+        if self._cache_size > 0:
+            with self._lock:
+                self._cache[cache_key] = tuple(result)
+                self._cache.move_to_end(cache_key)
+                while len(self._cache) > self._cache_size:
+                    self._cache.popitem(last=False)
+        return result
 
 
 class MilvusVectorStore(VectorStore):
@@ -135,7 +176,15 @@ class MilvusVectorStore(VectorStore):
                             {"metric_type": "BM25", "params": {}})
 
     def identifier_search(self, identifiers: Sequence[str], predicate: AuthPredicate, top_k: int) -> list[ScoredHit]:
-        tokens = list(dict.fromkeys(t for t in identifiers if t))[:32]
+        expanded: list[str] = []
+        for t in identifiers:
+            if not t:
+                continue
+            expanded.append(t)
+            upper = t.upper()
+            if upper != t:
+                expanded.append(upper)
+        tokens = list(dict.fromkeys(expanded))[:32]
         if not tokens:
             return []
         expr = predicate.to_milvus_expr()
@@ -171,15 +220,29 @@ class MilvusVectorStore(VectorStore):
 class MiniLMReranker(Reranker):
     """CPU-only cross encoder, loaded exclusively from pre-staged weights."""
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, batch_size: int = 32):
         if not model_path or not os.path.isdir(model_path):
             raise RuntimeError("MINILM_MODEL_PATH must be a pre-staged local directory")
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
         from sentence_transformers import CrossEncoder
         self._model = CrossEncoder(model_path, device="cpu", trust_remote_code=False)
+        self._batch_size = max(1, batch_size)
 
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
         if not passages:
             return []
-        return [float(v) for v in self._model.predict([(query, p) for p in passages])]
+        unique_passages = list(dict.fromkeys(passages))
+        # Sort by passage length so dynamic padding within each mini-batch pads
+        # to similar sequence lengths rather than the global max length.
+        order = sorted(range(len(unique_passages)), key=lambda i: len(unique_passages[i]))
+        sorted_pairs = [(query, unique_passages[i]) for i in order]
+        raw_scores = self._model.predict(
+            sorted_pairs,
+            batch_size=self._batch_size,
+            show_progress_bar=False,
+        )
+        score_by_passage: dict[str, float] = {}
+        for idx, val in zip(order, raw_scores):
+            score_by_passage[unique_passages[idx]] = float(val)
+        return [score_by_passage[p] for p in passages]

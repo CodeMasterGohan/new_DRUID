@@ -22,7 +22,8 @@ import datetime as dt
 import logging
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from services.common.request_context import RequestContext
@@ -142,6 +143,7 @@ class CatalogRepository:
                     Document.id == document_id,
                     Document.tenant_id == self._tenant_id(),
                     Document.is_deleted.is_(False),
+                # tenant-scoped active document
                 )
             )
             .scalars()
@@ -168,6 +170,7 @@ class CatalogRepository:
             .where(
                 Document.tenant_id == self._tenant_id(),
                 Document.is_deleted.is_(False),
+                # tenant-scoped active document
             )
             .order_by(Document.created_at.desc())
             .limit(limit)
@@ -308,6 +311,7 @@ class CatalogRepository:
                 DocumentVersion.status == IngestionState.READY,
                 DocumentVersion.status.notin_(_UNSEARCHABLE_STATES),
                 Document.is_deleted.is_(False),
+                # tenant-scoped active document
             )
         )
 

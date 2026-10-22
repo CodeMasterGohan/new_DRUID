@@ -59,6 +59,7 @@ class RetrievalService:
         context: Any,
         query: str,
         *,
+        top_k: int | None = None,
         task_hint: str | None = None,
         expand_neighbors: bool | None = None,
         diagnostics: dict[str, Any] | None = None,
@@ -150,18 +151,24 @@ class RetrievalService:
                 ctx.request_id,
             )
 
+        target_results = (
+            max(1, min(int(top_k), cfg.rerank_candidates))
+            if top_k is not None
+            else cfg.final_results
+        )
+
         # Reserve a bounded slot for a relevant page image when both
         # modalities are available. The previous text-first truncation made
         # page images unreachable whenever >= final_results text hits existed.
         image_slots = (
-            0 if reranked and cfg.final_results == 1
+            0 if reranked and target_results == 1
             else min(
                 len(image_records), cfg.max_page_image_results,
-                max(1, cfg.final_results // 4)
+                max(1, target_results // 4)
             ) if reranked
-            else min(len(image_records), cfg.final_results)
+            else min(len(image_records), target_results)
         )
-        text_slots = cfg.final_results - image_slots
+        text_slots = target_results - image_slots
         rerank_done = time.monotonic()
         ordered: list[tuple[FusedCandidate, float | None]] = [
             (cand, score) for cand, score in reranked[:text_slots]
@@ -187,13 +194,30 @@ class RetrievalService:
             for r in results
             if (r.document_id, r.document_version) in fresh_allowed
         ]
-        if len(results) != before_reconcile:
+        dropped_count = before_reconcile - len(results)
+        if dropped_count:
             log.info(
                 "reconciliation dropped %d result(s) deactivated mid-search "
                 "(request_id=%s)",
-                before_reconcile - len(results),
+                dropped_count,
                 ctx.request_id,
             )
+            # Backfill dropped primary slots from remaining authorized reranked
+            # candidates so mid-search revocation of one document does not
+            # unnecessarily under-fill the caller's passage budget.
+            if fresh_allowed and not do_expand and len(results) < target_results:
+                seen_ids = {r.chunk_id for r in results}
+                for cand, score in reranked[text_slots:]:
+                    if len(results) >= target_results:
+                        break
+                    rec = cand.record
+                    if (
+                        rec.chunk_id not in seen_ids
+                        and (rec.document_id, rec.document_version) in fresh_allowed
+                    ):
+                        seen_ids.add(rec.chunk_id)
+                        results.append(self._to_result(ctx, cand, score, len(results) + 1))
+
         # Re-number ranks after reconciliation filtering.
         for rank, r in enumerate(results, start=1):
             r.rank = rank
@@ -219,7 +243,7 @@ class RetrievalService:
                 "fused_count": len(fused),
                 "reranked_text_count": len(reranked),
                 "page_image_candidates": len(image_records),
-                "dropped_after_catalog_recheck": before_reconcile - len(results),
+                "dropped_after_catalog_recheck": dropped_count,
                 "result_count": len(results),
                 "timings_ms": {
                     "catalog": round((catalog_done - started) * 1000, 2),

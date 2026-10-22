@@ -158,6 +158,10 @@ async def search(
     query = query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query is required")
+    top_k = body.get("top_k")
+    if top_k is not None:
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1:
+            raise HTTPException(status_code=400, detail="top_k must be a positive integer")
     wants_diagnostics = body.get("diagnostics", False) is True
     if wants_diagnostics and (
         os.environ.get("DRUID_RETRIEVAL_DIAGNOSTICS") != "1"
@@ -165,12 +169,18 @@ async def search(
     ):
         raise HTTPException(status_code=403, detail="retrieval diagnostics not permitted")
     trace = {} if wants_diagnostics else None
-    results = get_service().search(
+    svc = get_service()
+    search_kwargs: dict = {
+        "task_hint": body.get("task_hint"),
+        "expand_neighbors": body.get("expand_neighbors"),
+        "diagnostics": trace,
+    }
+    if top_k is not None:
+        search_kwargs["top_k"] = top_k
+    results = svc.search(
         context,
         query,
-        task_hint=body.get("task_hint"),
-        expand_neighbors=body.get("expand_neighbors"),
-        diagnostics=trace,
+        **search_kwargs,
     )
     payload = {
         "results": [r.to_dict() for r in results],

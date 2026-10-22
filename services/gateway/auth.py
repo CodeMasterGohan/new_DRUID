@@ -12,6 +12,7 @@ unvalidated source. Missing or invalid tokens fail closed with
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
 
@@ -32,6 +33,7 @@ class JWTSettings:
     audience: str | None = None
     jwks_url: str | None = None
     jwks_cache_ttl_seconds: int = 3600
+    jwks_min_refresh_seconds: float = 10.0
 
 
 def settings_from_env(env=None) -> JWTSettings:
@@ -59,6 +61,35 @@ def settings_from_env(env=None) -> JWTSettings:
 
 # Small in-process JWKS cache: {jwks_url: (fetched_at, {kid: key})}.
 _jwks_cache: dict[str, tuple[float, dict[str, object]]] = {}
+_jwks_miss_at: dict[str, float] = {}
+_jwks_lock = threading.Lock()
+
+
+def _fetch_jwks_keys(jwks_url: str, now: float) -> tuple[float, dict[str, object]]:
+    import httpx
+
+    try:
+        response = httpx.get(jwks_url, timeout=10.0)
+        response.raise_for_status()
+        jwks = response.json()
+    except Exception as exc:
+        log.warning("JWKS fetch failed (%s): %s", jwks_url, exc)
+        raise AuthError(f"could not fetch JWKS: {exc}") from exc
+    keys: dict[str, object] = {}
+    for jwk in jwks.get("keys", []):
+        jwk_kid = jwk.get("kid") if isinstance(jwk, dict) else None
+        if not jwk_kid:
+            continue
+        try:
+            keys[jwk_kid] = pyjwt.PyJWK(jwk).key
+        except Exception:
+            try:
+                keys[jwk_kid] = pyjwt.algorithms.RSAAlgorithm.from_jwk(jwk)
+            except Exception:
+                continue
+    entry = (now, keys)
+    _jwks_cache[jwks_url] = entry
+    return entry
 
 
 def _get_key(token: str, settings: JWTSettings):
@@ -78,26 +109,23 @@ def _get_key(token: str, settings: JWTSettings):
         raise AuthError(f"{alg} token presented but no DRUID_JWT_JWKS_URL is configured")
     kid = header.get("kid")
     now = time.time()
-    cached = _jwks_cache.get(settings.jwks_url)
-    if cached is None or now - cached[0] > settings.jwks_cache_ttl_seconds:
-        import httpx
-
-        try:
-            response = httpx.get(settings.jwks_url, timeout=10.0)
-            response.raise_for_status()
-            jwks = response.json()
-        except Exception as exc:
-            log.warning("JWKS fetch failed (%s): %s", settings.jwks_url, exc)
-            raise AuthError(f"could not fetch JWKS: {exc}") from exc
-        keys = {}
-        for jwk in jwks.get("keys", []):
-            try:
-                keys[jwk["kid"]] = pyjwt.algorithms.RSAAlgorithm.from_jwk(jwk)
-            except Exception:
-                continue
-        _jwks_cache[settings.jwks_url] = (now, keys)
-        cached = (now, keys)
-    key = cached[1].get(kid)
+    with _jwks_lock:
+        cached = _jwks_cache.get(settings.jwks_url)
+        fetched_now = False
+        if cached is None or now - cached[0] > settings.jwks_cache_ttl_seconds:
+            cached = _fetch_jwks_keys(settings.jwks_url, now)
+            _jwks_miss_at.pop(settings.jwks_url, None)
+            fetched_now = True
+        key = cached[1].get(kid)
+        if key is None and not fetched_now:
+            last_miss = _jwks_miss_at.get(settings.jwks_url)
+            if last_miss is None or now - last_miss >= settings.jwks_min_refresh_seconds:
+                cached = _fetch_jwks_keys(settings.jwks_url, now)
+                key = cached[1].get(kid)
+                if key is not None:
+                    _jwks_miss_at.pop(settings.jwks_url, None)
+                else:
+                    _jwks_miss_at[settings.jwks_url] = now
     if key is None:
         raise AuthError("token key id is not in the JWKS set")
     return key
