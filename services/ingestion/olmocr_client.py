@@ -113,15 +113,26 @@ def _quality_check(metadata: dict, body: str) -> tuple[bool, str]:
 class OlmOcrClient:
     """HTTP client for the vLLM-served olmOCR endpoint."""
 
-    def __init__(self, config: OlmOcrConfig | None = None) -> None:
+    def __init__(self, config: OlmOcrConfig | None = None, *, client=None) -> None:
         self.config = config or OlmOcrConfig.from_env()
         self.settings = self.config.settings
+        self._client = client
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                import httpx
+            except ImportError as exc:
+                raise RuntimeError("httpx is required for the olmOCR client") from exc
+            self._client = httpx.Client(timeout=self.settings.request_timeout_s)
+        return self._client
+
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
     def _post(self, image_b64: str, prompt: str) -> str:
-        try:
-            import httpx
-        except ImportError as exc:
-            raise RuntimeError("httpx is required for the olmOCR client") from exc
         payload = {
             "model": self.settings.checkpoint,
             "messages": [
@@ -143,10 +154,10 @@ class OlmOcrClient:
         }
         headers = {"Authorization": f"Bearer {self.config.api_key}"}
         url = self.config.base_url.rstrip("/") + "/v1/chat/completions"
-        with httpx.Client(timeout=self.settings.request_timeout_s) as client:
-            resp = client.post(url, json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        client = self._get_client()
+        resp = client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:

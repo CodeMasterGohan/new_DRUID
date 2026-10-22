@@ -27,7 +27,7 @@ DEFAULT_PATTERNS: dict[str, str] = {
     # Honda-style part numbers (23441-HM8-B60) and dashed numeric codes
     "part_number": r"\b(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d[\w]*-\w+-\w+)\b",
     # Invoice / order numbers: INV-2024-00123, PO#45821, Order 99213
-    "invoice_number": r"\b(?:INV|PO|ORDER)[-#\s]*[A-Z0-9][A-Z0-9\-/]{2,20}\b",
+    "invoice_number": r"\b(?:INV|PO|ORDER)[-#\s]+[A-Z0-9]*\d[A-Z0-9\-/]*\b",
     # Clause / section / article references: § 4.2, Section 12.3(a), clause 7
     "clause_ref": (
         r"(?:§\s*\d+(?:\.\d+)*(?:\([a-z]\))?"

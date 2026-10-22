@@ -442,3 +442,30 @@ def test_login_redirect_is_same_origin_only(client: TestClient):
     )
     assert safe.status_code == 303
     assert safe.headers["location"] == "/documents?sort=recent"
+
+
+def test_upload_session_isolated_per_user_and_tenant(client: TestClient):
+    login_as(client, "group-a")
+    sid = _start_session(client, "doc.pdf", 1, 10)
+    # Different tenant cannot view, upload chunk, or complete group-a's session.
+    login_as(client, "group-b")
+    assert client.get(f"/upload/session/{sid}").status_code == 404
+    assert (
+        client.post(
+            f"/upload/session/{sid}/chunk?index=0",
+            files={"chunk": ("c0", b"0123456789")},
+        ).status_code
+        == 404
+    )
+    assert client.post(f"/upload/session/{sid}/complete").status_code == 404
+
+
+def test_upload_session_enforces_cumulative_max_bytes():
+    from upload_sessions import UploadSessionStore
+    import pytest
+
+    store = UploadSessionStore()
+    sess = store.create("doc.pdf", "application/pdf", 2, max_bytes=10)
+    store.add_chunk(sess.session_id, 0, b"123456")
+    with pytest.raises(ValueError, match="exceed maximum upload size"):
+        store.add_chunk(sess.session_id, 1, b"12345")

@@ -138,7 +138,14 @@ async def upload_session_create(
     if err:
         return JSONResponse(status_code=400, content={"detail": err})
     store = request.app.state.upload_sessions
-    session = store.create(filename, content_type, total_chunks)
+    session = store.create(
+        filename,
+        content_type,
+        total_chunks,
+        owner_user_id=identity.user_id,
+        owner_group_id=identity.group_id,
+        max_bytes=settings.max_upload_mb * 1024 * 1024,
+    )
     log.info(
         "upload session %s started: file=%r chunks=%d group=%s",
         session.session_id,
@@ -154,7 +161,11 @@ async def upload_session_state(request: Request, session_id: str):
     identity = _require_identity_fragment(request)
     if isinstance(identity, JSONResponse):
         return identity
-    session = request.app.state.upload_sessions.get(session_id)
+    session = request.app.state.upload_sessions.get(
+        session_id,
+        owner_user_id=identity.user_id,
+        owner_group_id=identity.group_id,
+    )
     if session is None:
         return JSONResponse(
             status_code=404, content={"detail": "unknown or expired session"}
@@ -178,7 +189,13 @@ async def upload_session_chunk(
         return JSONResponse(status_code=400, content={"detail": "chunk too large"})
     store = request.app.state.upload_sessions
     try:
-        session = store.add_chunk(session_id, index, data)
+        session = store.add_chunk(
+            session_id,
+            index,
+            data,
+            owner_user_id=identity.user_id,
+            owner_group_id=identity.group_id,
+        )
     except KeyError:
         return JSONResponse(
             status_code=404, content={"detail": "unknown or expired session"}
@@ -195,7 +212,11 @@ async def upload_session_complete(request: Request, session_id: str):
         return identity
     settings = request.app.state.web_ui_settings
     store = request.app.state.upload_sessions
-    session = store.get(session_id)
+    session = store.get(
+        session_id,
+        owner_user_id=identity.user_id,
+        owner_group_id=identity.group_id,
+    )
     if session is None:
         return JSONResponse(
             status_code=404, content={"detail": "unknown or expired session"}
@@ -205,9 +226,9 @@ async def upload_session_complete(request: Request, session_id: str):
             status_code=400, content={"detail": "not all chunks received"}
         )
     data = session.assemble()
-    store.pop(session_id)
     err = _validate_upload(session.filename, len(data), settings.max_upload_mb)
     if err:
+        store.pop(session_id)
         return JSONResponse(status_code=400, content={"detail": err})
     log.info(
         "upload session %s complete: file=%r bytes=%d group=%s",
@@ -226,6 +247,7 @@ async def upload_session_complete(request: Request, session_id: str):
             status_code=status,
             content={"detail": exc.detail or "upload failed"},
         )
+    store.pop(session_id)
     return JSONResponse(status_code=201, content=result)
 
 

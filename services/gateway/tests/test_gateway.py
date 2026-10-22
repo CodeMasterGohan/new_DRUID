@@ -359,3 +359,81 @@ def test_internal_header_tampering_fails_closed():
 
 def test_healthz_needs_no_auth(client):
     assert client.get("/healthz").status_code == 200
+
+
+def test_jwks_rotates_on_unknown_kid_and_throttles_bogus_kid(monkeypatch):
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+    import json as _json
+    import httpx
+    from services.gateway.auth import JWTSettings
+
+    key1 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    key2 = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk1 = _json.loads(RSAAlgorithm.to_jwk(key1.public_key()))
+    jwk1["kid"] = "kid-1"
+    jwk2 = _json.loads(RSAAlgorithm.to_jwk(key2.public_key()))
+    jwk2["kid"] = "kid-2"
+
+    active_jwks = {"keys": [jwk1]}
+    fetch_count = 0
+
+    class DummyResponse:
+        def __init__(self, payload: dict):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, timeout=10.0):
+        nonlocal fetch_count
+        fetch_count += 1
+        return DummyResponse(active_jwks)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    settings = JWTSettings(
+        secret="",
+        issuer=ISSUER,
+        audience=AUDIENCE,
+        algorithms=("RS256",),
+        jwks_url="http://keycloak/certs",
+    )
+    now = int(time.time())
+    tok1 = pyjwt.encode(
+        {"sub": "u1", "group_id": "g1", "roles": ["reader"], "iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + 300},
+        key1,
+        algorithm="RS256",
+        headers={"kid": "kid-1"},
+    )
+    ctx1 = validate_token(tok1, settings)
+    assert ctx1["user_id"] == "u1"
+    assert fetch_count == 1
+
+    # Rotate key in JWKS to kid-2; validate_token must refresh immediately on unknown kid-2.
+    active_jwks = {"keys": [jwk1, jwk2]}
+    tok2 = pyjwt.encode(
+        {"sub": "u2", "group_id": "g1", "roles": ["reader"], "iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + 300},
+        key2,
+        algorithm="RS256",
+        headers={"kid": "kid-2"},
+    )
+    ctx2 = validate_token(tok2, settings)
+    assert ctx2["user_id"] == "u2"
+    assert fetch_count == 2
+
+    # Bogus kid triggers at most one refresh, then throttles subsequent misses within cooldown.
+    bogus = pyjwt.encode(
+        {"sub": "u3", "group_id": "g1", "roles": ["reader"], "iss": ISSUER, "aud": AUDIENCE, "iat": now, "exp": now + 300},
+        key2,
+        algorithm="RS256",
+        headers={"kid": "kid-bogus"},
+    )
+    with pytest.raises(AuthError):
+        validate_token(bogus, settings)
+    assert fetch_count == 3
+    with pytest.raises(AuthError):
+        validate_token(bogus, settings)
+    assert fetch_count == 3

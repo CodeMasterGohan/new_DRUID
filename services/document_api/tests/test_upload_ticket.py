@@ -288,3 +288,124 @@ class TestRoleGatingUnchanged:
             json={"decision": "accepted", "detail": {}},
         )
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Commit-before-enqueue recovery regressions
+# ---------------------------------------------------------------------------
+
+
+class TestCommitBeforeEnqueueRecovery:
+    def test_redeem_recovers_after_enqueue_failure_and_version_marked_failed(
+        self, client, auth_headers, enqueued, monkeypatch, session_factory
+    ):
+        import routes.documents as documents_routes
+        from services.catalog.models import DocumentVersion, IngestionState
+
+        resp, pdf = _register(client, auth_headers)
+        reg = resp.json()
+
+        # Simulate transient Redis/RQ outage during first redeem.
+        def broken_enqueue(*a, **kw):
+            raise RuntimeError("redis connection refused")
+
+        monkeypatch.setattr(documents_routes, "enqueue_rq", broken_enqueue)
+        failed_resp = _redeem(
+            client, auth_headers, reg["document_id"], reg["upload_ticket"], pdf
+        )
+        assert failed_resp.status_code == 500
+
+        # Both Job and DocumentVersion must be marked FAILED (not stranded in UPLOADED).
+        sess = session_factory()
+        try:
+            ver = (
+                sess.query(DocumentVersion)
+                .filter_by(document_id=uuid.UUID(reg["document_id"]))
+                .one()
+            )
+            assert ver.status == IngestionState.FAILED
+        finally:
+            sess.close()
+
+        # Restore working queue and retry redemption with the same ticket.
+        def working_enqueue(queue_name, entrypoint, job, redis_url):
+            enqueued.append(
+                {
+                    "queue_name": queue_name,
+                    "entrypoint": entrypoint,
+                    "job_id": str(job.id),
+                }
+            )
+
+        monkeypatch.setattr(documents_routes, "enqueue_rq", working_enqueue)
+        recovered = _redeem(
+            client, auth_headers, reg["document_id"], reg["upload_ticket"], pdf
+        )
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json()["status"] == "UPLOADED"
+        assert len(enqueued) == 1
+
+    def test_delete_recovers_after_enqueue_failure(
+        self, client, auth_headers, enqueued, monkeypatch
+    ):
+        import routes.documents as documents_routes
+
+        resp, pdf = _register(client, auth_headers)
+        reg = resp.json()
+        _redeem(client, auth_headers, reg["document_id"], reg["upload_ticket"], pdf)
+        enqueued.clear()
+
+        def broken_enqueue(*a, **kw):
+            raise RuntimeError("redis down")
+
+        monkeypatch.setattr(documents_routes, "enqueue_rq", broken_enqueue)
+        first = client.delete(f"/v1/documents/{reg['document_id']}", headers=auth_headers)
+        assert first.status_code == 500
+
+        def working_enqueue(queue_name, entrypoint, job, redis_url):
+            enqueued.append(
+                {
+                    "queue_name": queue_name,
+                    "entrypoint": entrypoint,
+                    "job_id": str(job.id),
+                }
+            )
+
+        monkeypatch.setattr(documents_routes, "enqueue_rq", working_enqueue)
+        second = client.delete(f"/v1/documents/{reg['document_id']}", headers=auth_headers)
+        assert second.status_code == 202, second.text
+        assert second.json()["status"] == "UPLOADED"
+        assert len(enqueued) == 1
+
+    def test_job_retry_endpoint_reenqueues_failed_upload_job(
+        self, client, auth_headers, enqueued, monkeypatch
+    ):
+        import routes.documents as documents_routes
+
+        pdf = make_pdf(1)
+
+        def broken_enqueue(*a, **kw):
+            raise RuntimeError("redis timeout")
+
+        monkeypatch.setattr(documents_routes, "enqueue_rq", broken_enqueue)
+        up = client.post(
+            "/v1/documents/upload",
+            headers=auth_headers,
+            files={"file": ("doc.pdf", io.BytesIO(pdf), "application/pdf")},
+        )
+        assert up.status_code == 500
+
+        docs = client.get("/v1/documents", headers=auth_headers).json()["documents"]
+        doc_id = docs[0]["document_id"]
+        st = client.get(f"/v1/documents/{doc_id}/status", headers=auth_headers).json()
+        assert st["state"] == "FAILED"
+        job_id = st["job_id"]
+
+        def working_enqueue(queue_name, entrypoint, job, redis_url):
+            enqueued.append({"queue_name": queue_name, "job_id": str(job.id)})
+
+        monkeypatch.setattr(documents_routes, "enqueue_rq", working_enqueue)
+        retried = client.post(f"/v1/jobs/{job_id}/retry", headers=auth_headers)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["state"] == "UPLOADED"
+        assert len(enqueued) == 1

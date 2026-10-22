@@ -186,14 +186,29 @@ class SentenceTransformersGemmaBackend(EmbeddingBackend):
         return self._model
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
         model = self._load()
+        unique_texts: list[str] = []
+        text_to_idx: dict[str, int] = {}
+        order_map: list[int] = []
+        for t in texts:
+            idx = text_to_idx.get(t)
+            if idx is None:
+                idx = len(unique_texts)
+                text_to_idx[t] = idx
+                unique_texts.append(t)
+            order_map.append(idx)
         vectors = model.encode(
-            texts, normalize_embeddings=self.settings.normalize,
+            unique_texts, normalize_embeddings=self.settings.normalize,
             show_progress_bar=False,
         )
-        return [self._truncate([float(v) for v in row]) for row in vectors]
+        unique_vecs = [self._truncate([float(v) for v in row]) for row in vectors]
+        return [list(unique_vecs[idx]) for idx in order_map]
 
     def embed_images(self, images: list[bytes]) -> list[list[float]]:
+        if not images:
+            return []
         import io
 
         try:
@@ -201,12 +216,23 @@ class SentenceTransformersGemmaBackend(EmbeddingBackend):
         except ImportError as exc:
             raise RuntimeError("Pillow is required to embed page images") from exc
         model = self._load()
-        pil_images = [Image.open(io.BytesIO(b)).convert("RGB") for b in images]
+        unique_images: list[bytes] = []
+        img_to_idx: dict[bytes, int] = {}
+        order_map: list[int] = []
+        for b in images:
+            idx = img_to_idx.get(b)
+            if idx is None:
+                idx = len(unique_images)
+                img_to_idx[b] = idx
+                unique_images.append(b)
+            order_map.append(idx)
+        pil_images = [Image.open(io.BytesIO(b)).convert("RGB") for b in unique_images]
         vectors = model.encode(
             pil_images, normalize_embeddings=self.settings.normalize,
             show_progress_bar=False,
         )
-        return [self._truncate([float(v) for v in row]) for row in vectors]
+        unique_vecs = [self._truncate([float(v) for v in row]) for row in vectors]
+        return [list(unique_vecs[idx]) for idx in order_map]
 
     def _truncate(self, vector: list[float]) -> list[float]:
         """Matryoshka truncation — permitted only after M1 validation (§8)."""
@@ -240,10 +266,26 @@ class MockEmbeddingBackend(EmbeddingBackend):
         return [v / norm for v in vec]
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return [self._vector(t) for t in texts]
+        cache: dict[str, list[float]] = {}
+        out: list[list[float]] = []
+        for t in texts:
+            vec = cache.get(t)
+            if vec is None:
+                vec = self._vector(t)
+                cache[t] = vec
+            out.append(list(vec))
+        return out
 
     def embed_images(self, images: list[bytes]) -> list[list[float]]:
-        return [self._vector(f"image:{hashlib.sha256(b).hexdigest()}") for b in images]
+        cache: dict[bytes, list[float]] = {}
+        out: list[list[float]] = []
+        for b in images:
+            vec = cache.get(b)
+            if vec is None:
+                vec = self._vector(f"image:{hashlib.sha256(b).hexdigest()}")
+                cache[b] = vec
+            out.append(list(vec))
+        return out
 
 
 def make_page_image_record(

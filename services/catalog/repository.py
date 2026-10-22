@@ -239,7 +239,32 @@ class CatalogRepository:
             parser_revision=parser_revision,
             page_count=page_count,
         )
-        self.session.add(version)
+        for attempt in range(3):
+            try:
+                with self.session.begin_nested():
+                    self.session.add(version)
+                    self.session.flush()
+                return version
+            except IntegrityError:
+                if attempt == 2:
+                    raise
+                existing = (
+                    self.session.execute(
+                        select(func.max(DocumentVersion.version_number)).where(
+                            DocumentVersion.document_id == doc.id
+                        )
+                    ).scalar()
+                    or 0
+                )
+                version = DocumentVersion(
+                    document_id=doc.id,
+                    tenant_id=doc.tenant_id,
+                    version_number=existing + 1,
+                    status=IngestionState.UPLOADED,
+                    parser=parser,
+                    parser_revision=parser_revision,
+                    page_count=page_count,
+                )
         self.session.flush()
         return version
 
@@ -288,6 +313,29 @@ class CatalogRepository:
     # ------------------------------------------------------------------
     # searchability hard filter (§10 step 3, §12 "no partial visibility")
     # ------------------------------------------------------------------
+    def _document_acl_read_predicate(self):
+        """Enforce DocumentACL in SQL when ACL rows exist on a document (§4)."""
+        has_any_acl = exists(
+            select(DocumentACL.id).where(DocumentACL.document_id == Document.id)
+        )
+        principal_clauses = [
+            (DocumentACL.principal_type == "user")
+            & (DocumentACL.principal_id == self.context.user_id)
+        ]
+        if self.context.roles:
+            principal_clauses.append(
+                (DocumentACL.principal_type == "role")
+                & (DocumentACL.principal_id.in_(list(self.context.roles)))
+            )
+        has_read_grant = exists(
+            select(DocumentACL.id).where(
+                DocumentACL.document_id == Document.id,
+                DocumentACL.permission == "read",
+                or_(*principal_clauses),
+            )
+        )
+        return or_(~has_any_acl, has_read_grant)
+
     def searchable_versions_query(self):
         """Query limited to versions that may appear in search results.
 
@@ -310,6 +358,7 @@ class CatalogRepository:
                 DocumentVersion.is_active.is_(True),
                 DocumentVersion.status == IngestionState.READY,
                 DocumentVersion.status.notin_(_UNSEARCHABLE_STATES),
+                self._document_acl_read_predicate(),
                 Document.is_deleted.is_(False),
                 # tenant-scoped active document
             )

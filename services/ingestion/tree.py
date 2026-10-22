@@ -229,6 +229,10 @@ def _find_raw_block(raw: dict, block) -> dict | None:
 def _heading_level(text: str) -> int:
     # Single-level inference is enough for heading_path context; deeper
     # structure comes from the visual path's markdown headings.
+    m = re.match(r"^\s*\d+(?:\.(\d+))*\b", text)
+    if m:
+        prefix = m.group(0).strip().rstrip(".")
+        return min(3, prefix.count("."))
     return 0
 
 

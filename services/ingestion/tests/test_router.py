@@ -121,3 +121,18 @@ def test_signals_serialize_for_diagnostics():
     d = signals_to_dict(compute_signals(_page([])))
     assert d["is_blank"] is True
     assert "text_density_chars_per_sqin" in d
+
+
+def test_two_column_page_with_slight_vertical_offset_stays_native():
+    left = [
+        _block(_dense_text(200), x1=50, x2=280, y1=700 - i * 30, y2=714 - i * 30)
+        for i in range(10)
+    ]
+    right = [
+        _block(_dense_text(200), x1=320, x2=550, y1=699 - i * 30, y2=713 - i * 30)
+        for i in range(10)
+    ]
+    page = _page(left + right)
+    decision = route_page(page)
+    assert decision.signals.order_disagreement_ratio == 0.0
+    assert decision.route == PageRoute.NATIVE

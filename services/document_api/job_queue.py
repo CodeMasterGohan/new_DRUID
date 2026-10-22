@@ -21,6 +21,7 @@ Payload contract (read by the pipeline worker):
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 
 from services.catalog.models import Job
@@ -33,6 +34,20 @@ INGESTION_ENTRYPOINT = "services.ingestion.pipeline.run_ingestion_job"
 #: RQ entry point for deletion workers (services.ingestion.pipeline).
 DELETION_ENTRYPOINT = "services.ingestion.pipeline.run_deletion_job"
 
+_REDIS_LOCK = threading.Lock()
+_REDIS_CLIENTS: dict[str, object] = {}
+
+
+def _get_redis(redis_url: str):
+    from redis import Redis
+
+    with _REDIS_LOCK:
+        client = _REDIS_CLIENTS.get(redis_url)
+        if client is None:
+            client = Redis.from_url(redis_url)
+            _REDIS_CLIENTS[redis_url] = client
+        return client
+
 
 def enqueue_rq(queue_name: str, entrypoint: str, job: Job, redis_url: str) -> None:
     """Put an existing job row on the RQ ``queue_name``.
@@ -40,11 +55,11 @@ def enqueue_rq(queue_name: str, entrypoint: str, job: Job, redis_url: str) -> No
     Call only after the job row is committed — workers look it up by id.
     """
     try:
-        from redis import Redis
+        from redis import Redis  # noqa: F401
         from rq import Queue
     except ImportError as exc:
         raise RuntimeError("rq + redis are required to enqueue jobs") from exc
-    redis = Redis.from_url(redis_url)
+    redis = _get_redis(redis_url)
     queue = Queue(queue_name, connection=redis)
     queue.enqueue(entrypoint, str(job.id), job_id=f"{queue_name}-{job.id}")
     log.info(

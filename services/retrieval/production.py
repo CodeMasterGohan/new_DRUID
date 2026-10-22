@@ -80,9 +80,15 @@ class HttpEmbeddingClient(EmbeddingClient):
                     return list(cached)
 
         client = self._get_client()
-        response = client.post(self._url, json={
-            "queries": [query], "task": task,
-        })
+        if hasattr(client, "post"):
+            response = client.post(self._url, json={
+                "queries": [query], "task": task,
+            })
+        else:
+            with client as ctx_client:
+                response = ctx_client.post(self._url, json={
+                    "queries": [query], "task": task,
+                })
         response.raise_for_status()
         data = response.json()
         vectors = data.get("vectors", [])

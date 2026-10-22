@@ -357,3 +357,22 @@ def test_acl_group_wide_default_and_enforcement(session):
     # Another tenant member with no grant is now denied (rows exist).
     repo_bob = CatalogRepository(session, make_context("tenant-a", user_id="bob"))
     assert repo_bob.check_permission(doc.id, "read") is False
+
+
+def test_searchable_versions_enforces_document_acl_in_sql(session):
+    make_tenant(session, "tenant-a")
+    repo_alice = CatalogRepository(session, make_context("tenant-a", user_id="alice"))
+    doc, v = make_doc_with_version(session, repo_alice)
+    v.status = IngestionState.READY
+    v.is_active = True
+    doc.active_version_id = v.id
+    session.flush()
+    # Default: no ACL rows -> visible to both alice and bob.
+    repo_bob = CatalogRepository(session, make_context("tenant-a", user_id="bob"))
+    assert len(repo_alice.list_searchable_versions()) == 1
+    assert len(repo_bob.list_searchable_versions()) == 1
+
+    # Restrict read ACL to alice only -> bob gets 0 searchable versions from SQL.
+    repo_alice.grant(doc.id, principal_type="user", principal_id="alice", permission="read")
+    assert len(repo_alice.list_searchable_versions()) == 1
+    assert repo_bob.list_searchable_versions() == []

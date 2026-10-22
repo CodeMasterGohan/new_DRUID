@@ -26,7 +26,7 @@ _PATTERNS: tuple[re.Pattern, ...] = (
     ),
     # Invoice / PO / order numbers: "INV-2024-001", "PO#45821", "Order 99213"
     re.compile(
-        r"\b(?:INV|PO|ORDER)[-#\s]*[A-Za-z0-9][A-Za-z0-9\-/]{2,20}\b",
+        r"\b(?:INV|PO|ORDER)[-#\s]+[A-Za-z0-9]*\d[A-Za-z0-9\-/]*\b",
         re.IGNORECASE,
     ),
     # Multi-segment document numbers: "DOC-ABC-1234", "CVE-2024-12345"

@@ -1,6 +1,6 @@
 """Backend client for the web_ui (spec §16: API integration).
 
-The UI calls ONLY gateway REST endpoints with the *user's own* Bearer <redacted>
+The UI calls ONLY gateway REST endpoints with the *user's own* Bearer token.
 No direct Postgres / Milvus / RustFS access. Tenant scoping is enforced
 downstream by the gateway + document_api; this client never invents,
 overrides, or forwards tenant identity — it forwards the token and lets
@@ -53,29 +53,48 @@ class DruidApiClient:
         self._timeout = timeout_seconds
         self._transport = transport
         self._selected_group = selected_group
+        self._http_client: httpx.AsyncClient | None = None
 
     def _client(self) -> httpx.AsyncClient:
         # The user's token is the ONLY identity signal. No tenant headers,
         # no tenant query params — the gateway derives identity from the
         # token and strips anything spoofable.
-        return httpx.AsyncClient(
-            base_url=self._base,
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                **({"X-Group-Selection": self._selected_group}
-                   if self._selected_group else {}),
-            },
-            timeout=self._timeout,
-            transport=self._transport,
-        )
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                base_url=self._base,
+                headers={
+                    "Authorization": f"Bearer {self._token}",
+                    **({"X-Group-Selection": self._selected_group}
+                       if self._selected_group else {}),
+                },
+                timeout=self._timeout,
+                transport=self._transport,
+            )
+        return self._http_client
+
+    async def aclose(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
+        self._http_client = None
+
+    async def __aenter__(self) -> "DruidApiClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.aclose()
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        async with self._client() as client:
+        client = self._client()
+        try:
             try:
                 resp = await client.request(method, path, **kwargs)
-            except httpx.HTTPError as exc:
-                log.warning("backend call failed: %s %s: %s", method, path, exc)
-                raise ApiError(502, "backend unreachable") from exc
+            except RuntimeError:
+                self._http_client = None
+                client = self._client()
+                resp = await client.request(method, path, **kwargs)
+        except httpx.HTTPError as exc:
+            log.warning("backend call failed: %s %s: %s", method, path, exc)
+            raise ApiError(502, "backend unreachable") from exc
         if resp.status_code >= 400:
             detail = ""
             try:

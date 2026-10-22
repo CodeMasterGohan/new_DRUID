@@ -149,7 +149,31 @@ def _order_disagreement(blocks: list[TextBlock]) -> float:
         return ((y1 + y2) / 2.0, (x1 + x2) / 2.0)
 
     # NOTE: PDF y grows upward; reading order is decreasing y.
-    geo_order = sorted(range(len(blocks)), key=lambda i: (-_center(blocks[i])[0], _center(blocks[i])[1]))
+    heights = sorted(max(1.0, abs(b.bbox[3] - b.bbox[1])) for b in blocks)
+    band_tol = max(4.0, heights[len(heights) // 2] * 0.5)
+    geo_order = sorted(
+        range(len(blocks)),
+        key=lambda i: (-round(_center(blocks[i])[0] / band_tol), _center(blocks[i])[1]),
+    )
+    widths = [max(1.0, abs(b.bbox[2] - b.bbox[0])) for b in blocks]
+    col_tol = max(12.0, (sum(widths) / len(widths)) * 0.5)
+    col_order = sorted(
+        range(len(blocks)),
+        key=lambda i: (
+            round(_center(blocks[i])[1] / col_tol),
+            -round(_center(blocks[i])[0] / band_tol),
+        ),
+    )
+    col_rank = {idx: pos for pos, idx in enumerate(col_order)}
+    col_disagreements = sum(
+        1 for i in range(len(blocks) - 1) if col_rank[i] > col_rank[i + 1]
+    )
+    row_rank = {idx: pos for pos, idx in enumerate(geo_order)}
+    row_disagreements = sum(
+        1 for i in range(len(blocks) - 1) if row_rank[i] > row_rank[i + 1]
+    )
+    if min(row_disagreements, col_disagreements) < row_disagreements:
+        geo_order = col_order
     rank = {idx: pos for pos, idx in enumerate(geo_order)}
     disagreements = sum(
         1 for i in range(len(blocks) - 1) if rank[i] > rank[i + 1]

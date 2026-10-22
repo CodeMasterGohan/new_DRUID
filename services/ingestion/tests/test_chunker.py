@@ -166,3 +166,58 @@ def test_budget_violation_raises_not_silently_truncates():
     doc = _doc_with([_para("tiny")])
     with pytest.raises(ValueError, match="over the .* token budget"):
         chunker.chunk_document(doc)
+
+
+def test_table_row_groups_have_unique_chunk_ids():
+    rows = [[f"row {i} cell value {j} with more words here" for j in range(3)] for i in range(60)]
+    doc = _doc_with([_table_node(rows)])
+    chunker = _chunker()
+    chunks = chunker.chunk_document(doc)
+    assert len(chunks) > 1
+    assert len({c.chunk_id for c in chunks}) == len(chunks)
+
+
+def test_prose_overlap_never_overflows_budget():
+    paras = [
+        " ".join(f"tok{p}_{w}" for w in range(170)) + "."
+        for p in range(6)
+    ]
+    doc = _doc_with([_para("\n\n".join(paras), heading_path=["Sec1", "SubA"])])
+    chunker = _chunker()
+    chunks = chunker.chunk_document(doc)
+    assert len(chunks) > 1
+    _assert_budget(chunks, chunker)
+
+
+def test_prose_split_preserves_heading_path_on_all_chunks():
+    paras = [WORDS(180) for _ in range(5)]
+    doc = _doc_with([_para("\n\n".join(paras), heading_path=["Guide", "Setup"])])
+    chunker = _chunker()
+    chunks = chunker.chunk_document(doc)
+    assert len(chunks) >= 2
+    for c in chunks:
+        assert c.text.startswith("Guide > Setup")
+
+
+def test_oversized_single_table_row_splits_within_budget():
+    huge_row = [[" ".join(f"cellword_{i}" for i in range(600)), "b", "c"]]
+    doc = _doc_with([_table_node(huge_row)])
+    chunker = _chunker()
+    chunks = chunker.chunk_document(doc)
+    assert len(chunks) >= 2
+    _assert_budget(chunks, chunker)
+
+
+def test_dense_single_line_code_splits_within_budget():
+    dense_code = " ".join(f"x{i}=1;" for i in range(600))
+    node = Node(
+        node_id=stable_node_id("d", "v1", 0, "code_block", 99),
+        type=NodeType.CODE_BLOCK, document_id="d", document_version="v1",
+        page_index=0, bounding_box=None, heading_path=["Code"],
+        parser="native", parser_revision="r", text=dense_code,
+    )
+    doc = _doc_with([node])
+    chunker = _chunker()
+    chunks = chunker.chunk_document(doc)
+    assert len(chunks) >= 2
+    _assert_budget(chunks, chunker)

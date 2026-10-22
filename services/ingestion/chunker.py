@@ -17,6 +17,7 @@ tests inject a deterministic counter.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -119,16 +120,28 @@ class StructuralChunker:
     # ------------------------------------------------------------------
     # public API
     # ------------------------------------------------------------------
-    def chunk_document(self, doc: Node) -> list[Chunk]:
+    def chunk_document(self, doc: Node, *, start_order: int = 0) -> list[Chunk]:
         """Chunk a whole canonical document tree."""
         chunks: list[Chunk] = []
-        order = 0
-        for page in doc.children:
-            if page.type != NodeType.PAGE:
-                continue
+        seen_ids: set[str] = set()
+        order = start_order
+        for page in sorted(
+            (c for c in doc.children if c.type == NodeType.PAGE),
+            key=lambda p: p.page_index,
+        ):
             for child in page.children:
                 for chunk in self._chunk_node(child, doc, order):
+                    if chunk.chunk_id in seen_ids:
+                        seed = (
+                            f"{doc.document_id}|{doc.document_version}|"
+                            f"{child.node_id}|{order}|{chunk.text}"
+                        )
+                        chunk.chunk_id = (
+                            "c_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:20]
+                        )
+                    seen_ids.add(chunk.chunk_id)
                     chunk.chunk_order = order
+                    chunk.metadata["chunk_order"] = order
                     order += 1
                     chunks.append(chunk)
         return chunks
@@ -160,7 +173,9 @@ class StructuralChunker:
         parent_id: str | None = None,
         extra_metadata: dict | None = None,
     ) -> Chunk:
-        seed = f"{doc.document_id}|{doc.document_version}|{node.node_id}|{text[:128]}"
+        # Hash the full chunk text (not just text[:128]) so multi-chunk tables
+        # and split sections sharing a long header prefix never collide.
+        seed = f"{doc.document_id}|{doc.document_version}|{node.node_id}|{text}"
         chunk_id = "c_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:20]
         chunk = Chunk(
             chunk_id=chunk_id,
@@ -194,78 +209,194 @@ class StructuralChunker:
         """Include heading context in embedding text (§7)."""
         if node.heading_path:
             prefix = " > ".join(node.heading_path)
-            return f"{prefix}\n\n{text}"
+            if not text.startswith(prefix):
+                return f"{prefix}\n\n{text}"
         return text
+
+    def _heading_token_overhead(self, node: Node) -> int:
+        if not node.heading_path:
+            return 0
+        prefix = " > ".join(node.heading_path)
+        n = self.token_len(prefix)
+        # Guard against pathological/broken token_len callables.
+        if n >= self.settings.prose_target_tokens // 2:
+            return 0
+        return n
+
+    def _split_text_to_budget(self, text: str, max_tokens: int) -> list[str]:
+        """Split oversized text into pieces that each fit within ``max_tokens``.
+
+        Uses ``self.token_len`` directly rather than a fixed 4-chars-per-token
+        assumption so dense short-token inputs (e.g. code or numeric tables)
+        never exceed ``self._budget``. If even a single word/character exceeds
+        ``max_tokens`` (e.g. a broken tokenizer in tests), returns ``[text]``
+        so ``_enforce_budget`` surfaces the violation as required by §7.
+        """
+        if max_tokens < 1:
+            return [text]
+        if self.token_len(text) <= max_tokens:
+            return [text]
+        words = text.split()
+        if len(words) > 1:
+            if self.token_len(words[0]) > max_tokens:
+                return [text]
+            pieces: list[str] = []
+            lo = 0
+            n_words = len(words)
+            while lo < n_words:
+                # Exponential + binary search for the largest word span fitting max_tokens
+                step = min(max_tokens, n_words - lo)
+                hi = lo + max(1, step)
+                while hi < n_words and self.token_len(" ".join(words[lo:hi])) <= max_tokens:
+                    step = max(1, step * 2)
+                    hi = min(n_words, hi + step)
+                # Binary search in [lo + 1, hi]
+                left, right = lo + 1, hi
+                best = lo + 1
+                while left <= right:
+                    mid = (left + right) // 2
+                    if self.token_len(" ".join(words[lo:mid])) <= max_tokens:
+                        best = mid
+                        left = mid + 1
+                    else:
+                        right = mid - 1
+                pieces.append(" ".join(words[lo:best]))
+                lo = best
+            return pieces
+
+        # Single giant whitespace-free token: split by characters if possible.
+        if len(text) <= 1 or self.token_len(text[:1]) > max_tokens:
+            return [text]
+        pieces = []
+        lo = 0
+        n_chars = len(text)
+        while lo < n_chars:
+            left, right = lo + 1, min(n_chars, lo + max_tokens * 4)
+            best = lo + 1
+            while left <= right:
+                mid = (left + right) // 2
+                if self.token_len(text[lo:mid]) <= max_tokens:
+                    best = mid
+                    left = mid + 1
+                else:
+                    right = mid - 1
+            pieces.append(text[lo:best])
+            lo = best
+        return pieces
 
     # ------------------------------------------------------------------
     # prose: accumulate to target, overlap on paragraph boundaries
     # ------------------------------------------------------------------
     def _chunk_prose(self, node: Node, doc: Node):
-        text = node.text if node.type != NodeType.LIST else "\n".join(
+        raw_text = node.text if node.type != NodeType.LIST else "\n".join(
             f"- {i}" for i in node.data.get("items", [])
         )
-        text = self._with_heading_context(node, text)
-        if self.token_len(text) <= self.settings.prose_target_tokens:
-            yield self._make_chunk(node, doc, text)
+        full_text = self._with_heading_context(node, raw_text)
+        if self.token_len(full_text) <= self.settings.prose_target_tokens:
+            yield self._make_chunk(node, doc, full_text)
             return
-        # Split into paragraph units, then greedily pack to target.
-        units = [u for u in text.split("\n\n") if u.strip()]
+
+        heading_overhead = self._heading_token_overhead(node)
+        body_target = max(16, self.settings.prose_target_tokens - heading_overhead)
+        body_budget = max(16, self._budget - heading_overhead)
+
+        # Split raw body into paragraph units and attach heading context to
+        # every emitted chunk so later chunks do not lose section provenance.
+        units = [u for u in raw_text.split("\n\n") if u.strip()]
         buf: list[str] = []
         buf_tokens = 0
         for unit in units:
             u_tokens = self.token_len(unit)
-            if u_tokens > self.settings.prose_target_tokens:
+            if u_tokens > body_target:
                 # Single oversized unit: flush buffer, split unit by sentences.
                 if buf:
-                    yield self._make_chunk(node, doc, "\n\n".join(buf))
+                    yield self._make_chunk(
+                        node, doc, self._with_heading_context(node, "\n\n".join(buf))
+                    )
                     buf, buf_tokens = [], 0
-                yield from self._split_long_unit(node, doc, unit)
+                yield from self._split_long_unit(node, doc, unit, body_target, body_budget)
                 continue
-            if buf and buf_tokens + u_tokens > self.settings.prose_target_tokens:
-                yield self._make_chunk(node, doc, "\n\n".join(buf))
-                # Overlap: carry the tail (~overlap tokens) forward.
-                buf = self._overlap_tail(buf)
+            if buf and buf_tokens + u_tokens > body_target:
+                yield self._make_chunk(
+                    node, doc, self._with_heading_context(node, "\n\n".join(buf))
+                )
+                # Overlap: carry the tail (~overlap tokens) forward, bounded so
+                # buf_tokens + u_tokens never exceeds body_target / _budget.
+                max_overlap = max(0, min(self.settings.prose_overlap_tokens, body_target - u_tokens))
+                buf = self._overlap_tail(buf, max_tokens=max_overlap)
                 buf_tokens = sum(self.token_len(b) for b in buf)
             buf.append(unit)
             buf_tokens += u_tokens
         if buf:
-            yield self._make_chunk(node, doc, "\n\n".join(buf))
+            yield self._make_chunk(
+                node, doc, self._with_heading_context(node, "\n\n".join(buf))
+            )
 
-    def _overlap_tail(self, buf: list[str]) -> list[str]:
+    def _overlap_tail(self, buf: list[str], max_tokens: int | None = None) -> list[str]:
         """Carry ~overlap tokens of trailing context (prose only)."""
+        overlap_goal = self.settings.prose_overlap_tokens
+        cap = overlap_goal if max_tokens is None else min(overlap_goal, max_tokens)
+        if cap <= 0 or not buf:
+            return []
         tail: list[str] = []
         total = 0
         for unit in reversed(buf):
-            total += self.token_len(unit)
-            tail.insert(0, unit)
-            if total >= self.settings.prose_overlap_tokens:
+            u_tok = self.token_len(unit)
+            if total + u_tok <= cap:
+                tail.insert(0, unit)
+                total += u_tok
+                if total >= cap:
+                    break
+            else:
+                remaining = cap - total
+                if remaining > 0 and not tail:
+                    words = unit.split()
+                    if len(words) > remaining:
+                        sub = " ".join(words[-remaining:])
+                        if self.token_len(sub) <= cap:
+                            tail.insert(0, sub)
                 break
         return tail
 
-    def _split_long_unit(self, node: Node, doc: Node, unit: str):
+    def _split_long_unit(
+        self,
+        node: Node,
+        doc: Node,
+        unit: str,
+        body_target: int | None = None,
+        body_budget: int | None = None,
+    ):
         """Split an oversized prose unit on sentence boundaries."""
-        import re
-
+        target = body_target or self.settings.prose_target_tokens
+        budget = body_budget or self._budget
         sentences = re.split(r"(?<=[.!?])\s+", unit)
         buf: list[str] = []
         buf_tokens = 0
         for sent in sentences:
             s_tokens = self.token_len(sent)
-            if s_tokens > self._budget:
-                # Pathological single sentence: hard split on token estimate.
-                # Approximate by characters (4 chars ≈ 1 token) — the budget
-                # assertion in _make_chunk is the backstop.
-                approx = self._budget * 4
-                for i in range(0, len(sent), approx):
-                    yield self._make_chunk(node, doc, sent[i : i + approx])
+            if s_tokens > budget:
+                if buf:
+                    yield self._make_chunk(
+                        node, doc, self._with_heading_context(node, " ".join(buf))
+                    )
+                    buf, buf_tokens = [], 0
+                for piece in self._split_text_to_budget(sent, target):
+                    yield self._make_chunk(
+                        node, doc, self._with_heading_context(node, piece)
+                    )
                 continue
-            if buf and buf_tokens + s_tokens > self.settings.prose_target_tokens:
-                yield self._make_chunk(node, doc, " ".join(buf))
-                buf, buf_tokens = [], 0
+            if buf and buf_tokens + s_tokens > target:
+                yield self._make_chunk(
+                    node, doc, self._with_heading_context(node, " ".join(buf))
+                )
+                buf = self._overlap_tail(buf, max_tokens=max(0, min(self.settings.prose_overlap_tokens, target - s_tokens)))
+                buf_tokens = sum(self.token_len(b) for b in buf)
             buf.append(sent)
             buf_tokens += s_tokens
         if buf:
-            yield self._make_chunk(node, doc, " ".join(buf))
+            yield self._make_chunk(
+                node, doc, self._with_heading_context(node, " ".join(buf))
+            )
 
     # ------------------------------------------------------------------
     # tables: split by row groups, repeat headers, never sliding overlap
@@ -287,12 +418,18 @@ class StructuralChunker:
                 group = []
             group.append(row)
             # Safety: a single row larger than the whole budget must still
-            # not violate the hard rule — emit it alone; _make_chunk asserts.
+            # not violate the hard rule — split the oversized row across
+            # row-continuation chunks rather than truncating or crashing.
             if self.token_len(self._table_text(header_line, group, node)) > self._budget:
-                row_text = self._table_text(header_line, [group.pop()], node)
-                yield self._make_chunk(
-                    node, doc, row_text,
-                    extra_metadata={"rows": 1, "table_id": node.node_id},
+                oversized_row = group.pop()
+                if group:
+                    yield self._make_chunk(
+                        node, doc, self._table_text(header_line, group, node),
+                        extra_metadata={"rows": len(group), "table_id": node.node_id},
+                    )
+                    group = []
+                yield from self._split_oversized_table_row(
+                    header_line, oversized_row, node, doc
                 )
         if group:
             yield self._make_chunk(
@@ -300,8 +437,26 @@ class StructuralChunker:
                 extra_metadata={"rows": len(group), "table_id": node.node_id},
             )
         if not rows and not headers and node.text:
-            # Unparsed table text degrades to a single chunk.
-            yield self._make_chunk(node, doc, node.text)
+            # Unparsed table text degrades to prose-style splitting within budget.
+            for piece in self._split_text_to_budget(node.text, self.settings.prose_target_tokens):
+                yield self._make_chunk(node, doc, piece)
+
+    def _split_oversized_table_row(
+        self, header_line: str, row: list[str], node: Node, doc: Node
+    ):
+        """Split a single table row that exceeds ``self._budget`` into
+        header-preserving continuation chunks."""
+        shell_tokens = self.token_len(self._table_text(header_line, [[""]], node))
+        avail = max(16, self.settings.prose_target_tokens - shell_tokens)
+        row_line = " | ".join(row)
+        pieces = self._split_text_to_budget(row_line, avail)
+        for piece in pieces:
+            yield self._make_chunk(
+                node,
+                doc,
+                self._table_text(header_line, [[piece]], node),
+                extra_metadata={"rows": 1, "table_id": node.node_id},
+            )
 
     def _table_text(
         self, header_line: str, rows: list[list[str]], node: Node
@@ -321,37 +476,55 @@ class StructuralChunker:
     # code: split at blank lines (meaningful boundaries)
     # ------------------------------------------------------------------
     def _chunk_code(self, node: Node, doc: Node):
-        text = self._with_heading_context(node, node.text)
-        if self.token_len(text) <= self.settings.prose_target_tokens:
+        full_text = self._with_heading_context(node, node.text)
+        if self.token_len(full_text) <= self.settings.prose_target_tokens:
             yield self._make_chunk(
-                node, doc, text, extra_metadata={"content_type": "code"}
+                node, doc, full_text, extra_metadata={"content_type": "code"}
             )
             return
-        # Split at blank lines; fall back to hard splits guarded by budget.
-        parts = [p for p in text.split("\n\n") if p.strip()]
+        heading_overhead = self._heading_token_overhead(node)
+        body_target = max(16, self.settings.prose_target_tokens - heading_overhead)
+        body_budget = max(16, self._budget - heading_overhead)
+        # Split at blank lines; fall back to tokenizer-aware splits guarded by budget.
+        parts = [p for p in node.text.split("\n\n") if p.strip()]
         buf: list[str] = []
         buf_tokens = 0
         for part in parts:
             p_tokens = self.token_len(part)
-            if p_tokens > self._budget:
+            if p_tokens > body_budget:
                 if buf:
-                    yield self._make_chunk(node, doc, "\n\n".join(buf),
-                                           extra_metadata={"content_type": "code"})
+                    yield self._make_chunk(
+                        node,
+                        doc,
+                        self._with_heading_context(node, "\n\n".join(buf)),
+                        extra_metadata={"content_type": "code"},
+                    )
                     buf, buf_tokens = [], 0
-                approx = self._budget * 4
-                for i in range(0, len(part), approx):
-                    yield self._make_chunk(node, doc, part[i : i + approx],
-                                           extra_metadata={"content_type": "code"})
+                for piece in self._split_text_to_budget(part, body_target):
+                    yield self._make_chunk(
+                        node,
+                        doc,
+                        self._with_heading_context(node, piece),
+                        extra_metadata={"content_type": "code"},
+                    )
                 continue
-            if buf and buf_tokens + p_tokens > self.settings.prose_target_tokens:
-                yield self._make_chunk(node, doc, "\n\n".join(buf),
-                                       extra_metadata={"content_type": "code"})
+            if buf and buf_tokens + p_tokens > body_target:
+                yield self._make_chunk(
+                    node,
+                    doc,
+                    self._with_heading_context(node, "\n\n".join(buf)),
+                    extra_metadata={"content_type": "code"},
+                )
                 buf, buf_tokens = [], 0
             buf.append(part)
             buf_tokens += p_tokens
         if buf:
-            yield self._make_chunk(node, doc, "\n\n".join(buf),
-                                   extra_metadata={"content_type": "code"})
+            yield self._make_chunk(
+                node,
+                doc,
+                self._with_heading_context(node, "\n\n".join(buf)),
+                extra_metadata={"content_type": "code"},
+            )
 
     # ------------------------------------------------------------------
     # figures: reference chunk pointing at the retained render

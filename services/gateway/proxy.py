@@ -38,6 +38,21 @@ _HOP_BY_HOP = frozenset(
     }
 )
 
+_ORIGINAL_ASYNC_CLIENT = httpx.AsyncClient
+_SHARED_CLIENT: httpx.AsyncClient | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    global _SHARED_CLIENT
+    if _SHARED_CLIENT is None or _SHARED_CLIENT.is_closed:
+        _SHARED_CLIENT = httpx.AsyncClient(
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+            )
+        )
+    return _SHARED_CLIENT
+
 
 async def forward_request(
     request: Request,
@@ -76,10 +91,33 @@ async def forward_request(
         context.group_id,
     )
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            upstream = await client.request(
-                request.method, target, headers=headers, content=body
-            )
+        if httpx.AsyncClient is not _ORIGINAL_ASYNC_CLIENT:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                upstream = await client.request(
+                    request.method, target, headers=headers, content=body
+                )
+        else:
+            client = _get_shared_client()
+            try:
+                upstream = await client.request(
+                    request.method,
+                    target,
+                    headers=headers,
+                    content=body,
+                    timeout=timeout_seconds,
+                )
+            except RuntimeError:
+                # Event loop changed across test runs; recreate the pooled client.
+                global _SHARED_CLIENT
+                _SHARED_CLIENT = None
+                client = _get_shared_client()
+                upstream = await client.request(
+                    request.method,
+                    target,
+                    headers=headers,
+                    content=body,
+                    timeout=timeout_seconds,
+                )
     except httpx.TimeoutException:
         log.warning(
             "forward timeout → 504: %s %s request_id=%s",

@@ -472,3 +472,115 @@ def test_neighbor_expansion_is_authorized_and_opt_in():
     assert store.predicates["neighbors"].group_id == "tenant-a"
     # Ranks continue past final_results.
     assert results[-1].rank == len(results)
+
+
+# ----------------------------------------------------------------------
+# Hardening & optimization regressions
+# ----------------------------------------------------------------------
+def test_large_group_predicate_buckets_by_version_and_caches():
+    versions = frozenset((f"doc-{i:04d}", "1") for i in range(100))
+    pred = AuthPredicate(group_id="tenant-a", allowed_versions=versions)
+    expr1 = pred.to_milvus_expr()
+    expr2 = pred.to_milvus_expr()
+    assert expr1 is expr2
+    assert 'document_version == "1" and document_id in [' in expr1
+    assert len(expr1) < 2500
+
+
+def test_truncate_to_budget_never_returns_empty_on_leading_space_or_no_spaces():
+    leading_space = " " + ("A" * 2000)
+    truncated = truncate_to_budget(leading_space, max_chars=256)
+    assert len(truncated) == 256
+    no_space = "B" * 2000
+    assert len(truncate_to_budget(no_space, max_chars=256)) == 256
+
+
+def test_rerank_deduplicates_identical_passages():
+    from services.retrieval.models import FusedCandidate
+    from services.retrieval.reranker import rerank_text_candidates
+
+    recs = [
+        FusedCandidate(
+            record=make_record(f"c{i}", text=f"unique passage {i % 3}"),
+            fusion_score=1.0,
+        )
+        for i in range(9)
+    ]
+    reranker = FakeReranker()
+    rerank_text_candidates("query", recs, reranker)
+    assert len(reranker.seen_passages) == 1
+    assert len(reranker.seen_passages[0][1]) == 3
+
+
+def test_reconciliation_backfills_from_remaining_candidates():
+    allowed_initial = frozenset((f"doc-{i}", "1") for i in range(12))
+    # Revoke doc-0 and doc-1 mid-search
+    allowed_reconcile = frozenset((f"doc-{i}", "1") for i in range(2, 12))
+    catalog = FakeCatalog(allowed_initial, allowed_reconcile)
+    recs = [
+        make_record(f"c{i}", doc=f"doc-{i}", version="1")
+        for i in range(12)
+    ]
+    store = FakeStore(dense=recs, bm25=recs)
+    svc = make_service(store=store, catalog=catalog, final_results=8)
+    results = svc.search(make_context(), "backfill test")
+    assert len(results) == 8
+    returned_docs = {r.document_id for r in results}
+    assert "doc-0" not in returned_docs
+    assert "doc-1" not in returned_docs
+
+
+def test_search_respects_caller_top_k():
+    recs = [make_record(f"c{i}") for i in range(15)]
+    store = FakeStore(dense=recs, bm25=recs)
+    svc = make_service(store=store, final_results=8)
+    results = svc.search(make_context(), "hello", top_k=12)
+    assert len(results) == 12
+
+
+def test_identifier_alignment_between_ingestion_and_retrieval():
+    from services.ingestion.identifiers import extract_identifiers
+
+    sample = "Fix CVE-2024-12345 and ERR_404 in module AB-1234 at tag v1.2.3-rc1."
+    ing_ids = set(extract_identifiers(sample))
+    ret_ids = set(extract_identifier_tokens(sample))
+    for expected in ("CVE-2024-12345", "ERR_404", "AB-1234", "v1.2.3-rc1"):
+        assert expected in ing_ids
+        assert expected in ret_ids
+
+
+def test_http_embedding_client_reuses_client_and_caches_queries(monkeypatch):
+    import httpx
+    from services.retrieval.production import HttpEmbeddingClient
+
+    created_clients = 0
+    post_calls = 0
+
+    class DummyResp:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"vectors": [[0.1] * 768], "dimension": 768}
+
+    class DummyClient:
+        def __init__(self, *a, **kw):
+            nonlocal created_clients
+            created_clients += 1
+
+        def post(self, *a, **kw):
+            nonlocal post_calls
+            post_calls += 1
+            return DummyResp()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(httpx, "Client", DummyClient)
+    client = HttpEmbeddingClient("http://embedding:8005")
+    for i in range(10):
+        client.embed_query(build_query_prompt(f"query-{i % 3}", TASK_QUESTION_ANSWERING))
+    assert created_clients == 1
+    assert post_calls == 3

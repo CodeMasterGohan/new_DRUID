@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from collections import OrderedDict
 import logging
 import math
 import threading
@@ -32,11 +33,19 @@ _TASK_TO_SIBLING_TASK = {
 class EmbeddingService:
     """CPU-only EmbeddingGemma 2 service (§8, §2 GPU arbitration)."""
 
-    def __init__(self, settings: EmbeddingServiceSettings | None = None) -> None:
+    def __init__(
+        self,
+        settings: EmbeddingServiceSettings | None = None,
+        *,
+        cache_size: int = 512,
+    ) -> None:
         self.settings = settings or EmbeddingServiceSettings()
         self._ing = reuse.load_ingestion_embeddings()
         self._backend = self._build_backend()
         self._lock = threading.Lock()
+        self._cache_lock = threading.Lock()
+        self._cache_size = max(0, int(cache_size))
+        self._cache: OrderedDict[str, tuple[float, ...]] = OrderedDict()
         self._semaphore = asyncio.Semaphore(self.settings.max_concurrency)
         self._verified = False
 
@@ -119,12 +128,45 @@ class EmbeddingService:
             raise ValueError("texts must be non-empty")
         for t in formatted:
             self._guard_text(t)
-        out: list[list[float]] = []
-        async with self._semaphore:
-            for i in range(0, len(formatted), self.settings.batch_size):
-                batch = formatted[i : i + self.settings.batch_size]
-                out.extend(await asyncio.to_thread(self._encode_texts, batch))
-        return out
+
+        # Deduplicate across the request and check the bounded LRU cache so
+        # repeated queries/chunks do not burn extra CPU forward passes.
+        unique_missing: list[str] = []
+        missing_seen: set[str] = set()
+        resolved: dict[str, list[float]] = {}
+        if self._cache_size > 0:
+            with self._cache_lock:
+                for t in formatted:
+                    cached = self._cache.get(t)
+                    if cached is not None:
+                        self._cache.move_to_end(t)
+                        resolved[t] = list(cached)
+                    elif t not in missing_seen:
+                        missing_seen.add(t)
+                        unique_missing.append(t)
+        else:
+            for t in formatted:
+                if t not in missing_seen:
+                    missing_seen.add(t)
+                    unique_missing.append(t)
+
+        if unique_missing:
+            encoded_missing: list[list[float]] = []
+            async with self._semaphore:
+                for i in range(0, len(unique_missing), self.settings.batch_size):
+                    batch = unique_missing[i : i + self.settings.batch_size]
+                    encoded_missing.extend(await asyncio.to_thread(self._encode_texts, batch))
+            for t, vec in zip(unique_missing, encoded_missing):
+                resolved[t] = vec
+            if self._cache_size > 0:
+                with self._cache_lock:
+                    for t, vec in zip(unique_missing, encoded_missing):
+                        self._cache[t] = tuple(vec)
+                        self._cache.move_to_end(t)
+                        while len(self._cache) > self._cache_size:
+                            self._cache.popitem(last=False)
+
+        return [list(resolved[t]) for t in formatted]
 
     async def embed_documents(
         self,

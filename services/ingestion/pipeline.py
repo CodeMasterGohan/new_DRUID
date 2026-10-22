@@ -26,6 +26,8 @@ from __future__ import annotations
 import abc
 import logging
 import os
+import threading
+from typing import Callable
 import uuid
 from dataclasses import dataclass, field
 
@@ -53,6 +55,10 @@ log = logging.getLogger("druid.ingestion")
 
 PARSER_REVISION_NATIVE = "pdftext-0.4.2+router-v1"
 PARSER_REVISION_OLMOCR = "olmocr-2-7b-1025-fp8+router-v1"
+
+_SESSION_MAKER_LOCK = threading.Lock()
+_SESSION_MAKERS: dict[str, object] = {}
+_REDIS_CLIENTS: dict[str, object] = {}
 
 
 class _ReviewRequired(Exception):
@@ -146,7 +152,15 @@ class RustFSObjectStore(ObjectStore):
                                content_type=content_type or "application/octet-stream")
 
     def get_bytes(self, key: str) -> bytes:
-        return self._client.get_object(self._bucket, key).read()
+        resp = self._client.get_object(self._bucket, key)
+        try:
+            return resp.read()
+        finally:
+            try:
+                resp.close()
+                resp.release_conn()
+            except Exception:  # noqa: BLE001
+                pass
 
     def delete_prefix(self, prefix: str) -> int:
         count = 0
@@ -159,6 +173,17 @@ class RustFSObjectStore(ObjectStore):
 # ---------------------------------------------------------------------------
 # Queue
 # ---------------------------------------------------------------------------
+
+
+def _get_redis_client(redis_url: str):
+    from redis import Redis
+
+    with _SESSION_MAKER_LOCK:
+        client = _REDIS_CLIENTS.get(redis_url)
+        if client is None:
+            client = Redis.from_url(redis_url)
+            _REDIS_CLIENTS[redis_url] = client
+        return client
 
 
 def enqueue_ingestion_job(
@@ -188,12 +213,12 @@ def enqueue_ingestion_job(
     )
     try:
         import rq  # noqa: F401
-        from redis import Redis
+        from redis import Redis  # noqa: F401
     except ImportError as exc:
         raise RuntimeError("rq + redis are required to enqueue jobs") from exc
-    import os
 
-    redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    redis = _get_redis_client(redis_url)
     q = rq.Queue(queue_name, connection=redis)
     q.enqueue(
         "services.ingestion.pipeline.run_ingestion_job",
@@ -217,6 +242,7 @@ class PipelineDeps:
     index_sink: IndexSink = field(default_factory=LoggingIndexSink)
     object_store: ObjectStore = field(default_factory=MemoryObjectStore)
     olmocr_config: OlmOcrConfig | None = None
+    token_len: Callable[[str], int] | None = None
     # Native pages whose table regions fall below confidence route to olmOCR.
     route_low_confidence_tables_to_visual: bool = True
     # Embed page-image records for native pages too (provisional; M1 tunes
@@ -279,16 +305,19 @@ def run_ingestion_job(
 
 
 def _default_session():
-    import os
-
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     url = os.environ.get("DATABASE_URL", "")
     if not url:
         raise RuntimeError("DATABASE_URL is not set")
-    engine = create_engine(url)
-    return sessionmaker(bind=engine)()
+    with _SESSION_MAKER_LOCK:
+        maker = _SESSION_MAKERS.get(url)
+        if maker is None:
+            engine = create_engine(url, pool_pre_ping=True)
+            maker = sessionmaker(bind=engine)
+            _SESSION_MAKERS[url] = maker
+    return maker()
 
 
 def _run(session, job_id: uuid.UUID, deps: PipelineDeps) -> str:
@@ -388,14 +417,14 @@ def _run(session, job_id: uuid.UUID, deps: PipelineDeps) -> str:
 def _parse_document(repo, job: Job, version, tenant_prefix: str,
                     deps: PipelineDeps, session) -> dict:
     """PARSING stage: native extract → route → tables/visual → trees."""
-    from .native_worker import render_page_png
+    from .native_worker import render_pages_png
 
     payload = job.payload or {}
     pdf_key = payload.get("pdf_key")
     if not pdf_key:
         raise ValueError("job payload missing 'pdf_key' (S3 key of the original)")
     pdf_bytes = deps.object_store.get_bytes(pdf_key)
-    import tempfile, os
+    import tempfile
 
     # pdftext needs a real path (file-likes can't cross the process boundary).
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -426,6 +455,7 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
                 continue
             if (decision.route == PageRoute.VISUAL
                     or (deps.route_low_confidence_tables_to_visual and low_conf_tables
+                        and decision.signals.table_area_ratio >= deps.config.router.table_area_ratio_heavy
                         and decision.route == PageRoute.NATIVE)):
                 visual_pages.append(page.page_index)
             else:
@@ -448,36 +478,41 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
 
         # Visual path: render → olmOCR → tree; low quality → quarantine.
         if visual_pages:
+            rendered_batch = render_pages_png(
+                pdf_path, visual_pages,
+                longest_dim_px=deps.config.olmocr.render_longest_dim_px,
+            )
             client = OlmOcrClient(deps.olmocr_config)
-            results = []
-            for page_index in visual_pages:
-                png = render_page_png(
-                    pdf_path, page_index,
-                    longest_dim_px=deps.config.olmocr.render_longest_dim_px)
-                png_cache[page_index] = png
-                render_key = (f"{tenant_prefix}/renders/page-{page_index:04d}.png")
-                deps.object_store.put_bytes(render_key, png, "image/png")
-                result = client.process_page(pdf_path, page_index, png_bytes=png)
-                if result.quality_status != "accepted":
-                    repo.quarantine_page(
-                        document_id=version.document_id,
-                        document_version_id=version.id,
-                        job_id=job.id,
-                        page_index=page_index,
-                        page_render_ref=render_key,
-                        parse_attempts={"visual": {
-                            "markdown": result.markdown,
-                            "metadata": result.metadata,
-                            "error": result.error}},
-                        routing_diagnostics=routing[page_index],
-                    )
-                    session.commit()
-                    continue
-                results.append(result)
-            if results:
-                trees.append(build_tree_from_olmocr(
-                    str(version.document_id), str(version.version_number), results,
-                    parser_revision=PARSER_REVISION_OLMOCR))
+            try:
+                results = []
+                for page_index in visual_pages:
+                    png = rendered_batch[page_index]
+                    png_cache[page_index] = png
+                    render_key = (f"{tenant_prefix}/renders/page-{page_index:04d}.png")
+                    deps.object_store.put_bytes(render_key, png, "image/png")
+                    result = client.process_page(pdf_path, page_index, png_bytes=png)
+                    if result.quality_status != "accepted":
+                        repo.quarantine_page(
+                            document_id=version.document_id,
+                            document_version_id=version.id,
+                            job_id=job.id,
+                            page_index=page_index,
+                            page_render_ref=render_key,
+                            parse_attempts={"visual": {
+                                "markdown": result.markdown,
+                                "metadata": result.metadata,
+                                "error": result.error}},
+                            routing_diagnostics=routing[page_index],
+                        )
+                        session.commit()
+                        continue
+                    results.append(result)
+                if results:
+                    trees.append(build_tree_from_olmocr(
+                        str(version.document_id), str(version.version_number), results,
+                        parser_revision=PARSER_REVISION_OLMOCR))
+            finally:
+                client.close()
 
         if repo.pending_quarantine_count(version.id) > 0:
             # Parked for review — never silently index partial content.
@@ -504,10 +539,37 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
 
 
 def _chunk_trees(trees: list[Node], deps: PipelineDeps) -> list[Chunk]:
-    chunker = StructuralChunker(settings=deps.config.chunker)
-    chunks: list[Chunk] = []
-    for tree in trees:
-        chunks.extend(chunker.chunk_document(tree))
+    chunker = StructuralChunker(
+        settings=deps.config.chunker,
+        token_len=deps.token_len,
+    )
+    if not trees:
+        raise ValueError("chunking produced zero chunks")
+    if len(trees) == 1:
+        chunks = chunker.chunk_document(trees[0])
+    else:
+        # Merge page nodes from native and visual trees in true document page
+        # order so chunk_order is strictly monotonic and heading_path propagates
+        # across native/visual page transitions.
+        all_pages: list[Node] = []
+        for tree in trees:
+            all_pages.extend(tree.children)
+        all_pages.sort(key=lambda p: (p.page_index is None, p.page_index or 0))
+        active_headings: list[str] = []
+        for page_node in all_pages:
+            for child in page_node.children:
+                if child.heading_path:
+                    active_headings = list(child.heading_path)
+                elif active_headings:
+                    child.heading_path = list(active_headings)
+        from dataclasses import replace
+
+        merged = replace(
+            trees[0],
+            parser="mixed",
+            children=all_pages,
+        )
+        chunks = chunker.chunk_document(merged)
     if not chunks:
         raise ValueError("chunking produced zero chunks")
     return chunks

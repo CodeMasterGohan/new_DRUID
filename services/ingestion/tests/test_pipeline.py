@@ -213,3 +213,37 @@ def test_terminal_jobs_are_not_rerun(job_setup, monkeypatch):
     assert run_ingestion_job(str(job_id), session_factory=maker,
                              deps=deps) == "READY"
     assert calls == []
+
+
+def test_mixed_native_and_visual_trees_get_monotonic_chunk_orders_and_headings():
+    from services.ingestion.router import PageGeometry, TextBlock
+    from services.ingestion.native_worker import NativePage
+    from services.ingestion.olmocr_client import OlmOcrResult
+    from services.ingestion.tree import build_tree_from_native, build_tree_from_olmocr
+
+    p0_geom = PageGeometry(
+        page_index=0,
+        page_bbox=(0, 0, 612, 792),
+        blocks=[
+            TextBlock(text="1. Introduction", bbox=(72, 700, 300, 718), lines=[(72, 700, 300, 718)]),
+            TextBlock(text="Native page zero content.", bbox=(72, 660, 500, 680), lines=[(72, 660, 500, 680)]),
+        ],
+    )
+    native_tree = build_tree_from_native(
+        "doc-mix",
+        "1",
+        [NativePage(page_index=0, page_bbox=(0, 0, 612, 792), rotation=0, geometry=p0_geom)],
+        {},
+        parser_revision="r1",
+    )
+    visual_tree = build_tree_from_olmocr(
+        "doc-mix",
+        "1",
+        [OlmOcrResult(page_index=1, markdown="Visual page one content.", metadata={}, quality_status="accepted", attempts=1, latency_s=0.1)],
+        parser_revision="r1",
+    )
+    deps = PipelineDeps(token_len=lambda t: len(t.split()))
+    chunks = pipeline._chunk_trees([native_tree, visual_tree], deps)
+    orders = [c.chunk_order for c in chunks]
+    assert len(orders) == len(set(orders))
+    assert orders == list(range(len(orders)))

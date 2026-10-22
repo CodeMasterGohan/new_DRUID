@@ -162,6 +162,26 @@ def _original_key(context: RequestContext, doc, version) -> str:
     return storage_key(context.group_id, str(doc.id), str(version.id), "original")
 
 
+def _mark_job_enqueued(job, session: Session) -> None:
+    """Record enqueue confirmation in job.payload after enqueue_rq succeeds."""
+    existing_payload = getattr(job, "payload", None) or {}
+    job.payload = {
+        **existing_payload,
+        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    session.commit()
+
+
+def _needs_reenqueue(job) -> bool:
+    """True when a committed job never made it onto RQ (or failed enqueueing)."""
+    payload = getattr(job, "payload", None) or {}
+    if job.state == IngestionState.FAILED:
+        return True
+    if job.state == IngestionState.UPLOADED and not payload.get("enqueued_at"):
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # POST /v1/documents/upload
 # ---------------------------------------------------------------------------
@@ -235,12 +255,14 @@ async def upload_document(
             enqueue_rq(
                 settings.ingest_queue, INGESTION_ENTRYPOINT, job, settings.redis_url
             )
+            _mark_job_enqueued(job, session)
         except Exception as exc:
-            # The job row exists but no worker will pick it up — park it as
-            # FAILED so it shows up in status instead of hanging in UPLOADED.
+            # The job row exists but no worker will pick it up — park both
+            # the job and version as FAILED so neither hangs in UPLOADED.
             repo.update_job_state(
                 job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
             )
+            repo.update_version_status(version.id, IngestionState.FAILED)
             session.commit()
             log.error(
                 "upload enqueue failed: job=%s document=%s group=%s request_id=%s: %s",
@@ -478,7 +500,17 @@ async def upload_document_bytes(
         expected_ticket, upload_ticket
     ):
         raise HTTPException(status_code=403, detail="invalid upload ticket")
-    if payload.get("ticket_consumed_at"):
+
+    already_consumed = bool(payload.get("ticket_consumed_at"))
+    # Recovery path: if a prior redemption committed the version + job payload
+    # but failed or crashed before enqueue_rq succeeded, allow the ticket
+    # holder to retry redemption instead of stranding the version in FAILED/UPLOADED.
+    recovering_unenqueued = (
+        already_consumed
+        and job.document_version_id is not None
+        and _needs_reenqueue(job)
+    )
+    if already_consumed and not recovering_unenqueued:
         raise HTTPException(
             status_code=409, detail="upload ticket already used"
         )
@@ -536,40 +568,50 @@ async def upload_document_bytes(
             )
         display_name = _safe_display_name(file.filename)
 
-        version = repo.create_version(
-            doc.id,
-            parser=UPLOAD_PARSER,
-            parser_revision=UPLOAD_PARSER_REVISION,
-            page_count=page_count,
-        )
-        key = _original_key(context, doc, version)
-        store.put_bytes(key, data, content_type=mime)
-        stored_keys.append(key)
+        if recovering_unenqueued and job.document_version_id is not None:
+            version = repo.get_version(job.document_version_id)
+            key = _original_key(context, doc, version)
+            store.put_bytes(key, data, content_type=mime)
+            repo.update_job_state(job.id, IngestionState.UPLOADED, error=None)
+            repo.update_version_status(version.id, IngestionState.UPLOADED)
+            session.commit()
+        else:
+            version = repo.create_version(
+                doc.id,
+                parser=UPLOAD_PARSER,
+                parser_revision=UPLOAD_PARSER_REVISION,
+                page_count=page_count,
+            )
+            key = _original_key(context, doc, version)
+            store.put_bytes(key, data, content_type=mime)
+            stored_keys.append(key)
 
-        # Promote the registration job into the ingestion job: attach the
-        # version, the worker payload, and mark the ticket consumed, then
-        # commit BEFORE the job becomes visible to workers.
-        job.document_version_id = version.id
-        job.payload = {
-            **payload,
-            "queue": settings.ingest_queue,
-            "pdf_key": key,
-            "content_type": mime,
-            "page_count": page_count,
-            "document_id": str(doc.id),
-            "document_version_id": str(version.id),
-            "ticket_consumed_at": datetime.now(timezone.utc).isoformat(),
-        }
-        session.commit()
+            # Promote the registration job into the ingestion job: attach the
+            # version, the worker payload, and mark the ticket consumed, then
+            # commit BEFORE the job becomes visible to workers.
+            job.document_version_id = version.id
+            job.payload = {
+                **payload,
+                "queue": settings.ingest_queue,
+                "pdf_key": key,
+                "content_type": mime,
+                "page_count": page_count,
+                "document_id": str(doc.id),
+                "document_version_id": str(version.id),
+                "ticket_consumed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            session.commit()
 
         try:
             enqueue_rq(
                 settings.ingest_queue, INGESTION_ENTRYPOINT, job, settings.redis_url
             )
+            _mark_job_enqueued(job, session)
         except Exception as exc:
             repo.update_job_state(
                 job.id, IngestionState.FAILED, error=f"enqueue failed: {exc}"
             )
+            repo.update_version_status(version.id, IngestionState.FAILED)
             session.commit()
             log.error(
                 "bytes upload enqueue failed: job=%s document=%s group=%s "
@@ -748,12 +790,35 @@ def delete_document(
                                   queue_name=settings.delete_queue)
         session.commit()
     except ConflictError:
-        # A deletion is already queued for this document — report it.
+        # A deletion job row already exists for this document.
         existing = repo.get_job_by_idempotency_key(f"delete-{doc.id.hex}")
         session.commit()
         if existing is None:  # pragma: no cover - cannot happen post-conflict
             raise HTTPException(status_code=409,
                                 detail="deletion already queued for this document")
+        if _needs_reenqueue(existing):
+            try:
+                enqueue_rq(
+                    settings.delete_queue,
+                    DELETION_ENTRYPOINT,
+                    existing,
+                    settings.redis_url,
+                )
+                repo.update_job_state(
+                    existing.id, IngestionState.UPLOADED, error=None
+                )
+                _mark_job_enqueued(existing, session)
+            except Exception as exc:
+                repo.update_job_state(
+                    existing.id,
+                    IngestionState.FAILED,
+                    error=f"enqueue failed: {exc}",
+                )
+                session.commit()
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"deletion authorized but enqueue failed: {exc}",
+                )
         log.info(
             "delete deduped: document=%s existing_job=%s group=%s request_id=%s",
             doc.id,
@@ -770,6 +835,7 @@ def delete_document(
     try:
         enqueue_rq(settings.delete_queue, DELETION_ENTRYPOINT, job,
                    settings.redis_url)
+        _mark_job_enqueued(job, session)
     except Exception as exc:
         repo.update_job_state(job.id, IngestionState.FAILED,
                               error=f"enqueue failed: {exc}")

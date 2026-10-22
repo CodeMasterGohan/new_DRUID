@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -10,6 +12,8 @@ from api_client import DruidApiClient
 from deps import Identity, NotAuthenticated, get_identity
 
 templates: Jinja2Templates | None = None
+
+_ENRICH_CONCURRENCY = 8
 
 
 def get_templates() -> Jinja2Templates:
@@ -89,24 +93,26 @@ async def enrich_documents(client, documents: list[dict]) -> list[dict]:
     """Attach active-version status/page count to each document summary.
 
     The list endpoint returns summaries only; version state lives on the
-    detail endpoint. N+1 is fine for a human-scale table (≤100 rows).
+    detail endpoint. Enriches with bounded concurrency so a 100-row table
+    does not serialize 100 round-trips.
     ``latest_status`` is the newest version's status (the detail endpoint
     orders versions newest first), used to surface failed re-ingests.
     """
     from api_client import ApiError
 
-    enriched = []
-    for d in documents:
+    semaphore = asyncio.Semaphore(_ENRICH_CONCURRENCY)
+
+    async def _enrich_one(d: dict) -> dict:
         row = dict(d)
         row["status"] = "—"
         row["page_count"] = "—"
         row["version_number"] = "—"
         row["latest_status"] = None
-        try:
-            detail = await client.get_document(d["document_id"])
-        except ApiError:
-            enriched.append(row)
-            continue
+        async with semaphore:
+            try:
+                detail = await client.get_document(d["document_id"])
+            except ApiError:
+                return row
         versions = detail.get("versions", [])
         active = next((v for v in versions if v.get("is_active")), None)
         target = active or (versions[0] if versions else None)
@@ -116,8 +122,9 @@ async def enrich_documents(client, documents: list[dict]) -> list[dict]:
             row["version_number"] = target.get("version_number", "—")
         if versions:
             row["latest_status"] = versions[0].get("status")
-        enriched.append(row)
-    return enriched
+        return row
+
+    return list(await asyncio.gather(*(_enrich_one(d) for d in documents)))
 
 
 __all__ = [

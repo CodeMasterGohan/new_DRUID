@@ -167,6 +167,39 @@ def extract_tables_native(
     return result
 
 
+def render_pages_png(
+    pdf_path: str, page_indices: list[int], *, longest_dim_px: int = 1288
+) -> dict[int, bytes]:
+    """Render multiple pages to PNG bytes while opening the PDF document once."""
+    if not page_indices:
+        return {}
+    try:
+        import pypdfium2 as pdfium
+    except ImportError as exc:
+        raise RuntimeError(
+            "pypdfium2 is required for page rendering but is not installed."
+        ) from exc
+    import io
+
+    out: dict[int, bytes] = {}
+    pdf = pdfium.PdfDocument(pdf_path)
+    try:
+        for page_index in page_indices:
+            if page_index in out:
+                continue
+            page = pdf[page_index]
+            width_pt, height_pt = page.get_size()
+            scale = longest_dim_px / max(width_pt, height_pt)
+            bitmap = page.render(scale=scale)
+            pil_image = bitmap.to_pil()
+            buf = io.BytesIO()
+            pil_image.save(buf, format="PNG")
+            out[page_index] = buf.getvalue()
+        return out
+    finally:
+        pdf.close()
+
+
 def render_page_png(
     pdf_path: str, page_index: int, *, longest_dim_px: int = 1288
 ) -> bytes:
@@ -176,27 +209,9 @@ def render_page_png(
     read-only and short-lived; bulk extraction still goes through
     :func:`extract_pages_native`.
     """
-    try:
-        import pypdfium2 as pdfium
-    except ImportError as exc:
-        raise RuntimeError(
-            "pypdfium2 is required for page rendering but is not installed."
-        ) from exc
-    pdf = pdfium.PdfDocument(pdf_path)
-    try:
-        page = pdf[page_index]
-        # Scale so the longest dimension equals longest_dim_px.
-        width_pt, height_pt = page.get_size()
-        scale = longest_dim_px / max(width_pt, height_pt)
-        bitmap = page.render(scale=scale)
-        pil_image = bitmap.to_pil()
-        import io
-
-        buf = io.BytesIO()
-        pil_image.save(buf, format="PNG")
-        return buf.getvalue()
-    finally:
-        pdf.close()
+    return render_pages_png(
+        pdf_path, [page_index], longest_dim_px=longest_dim_px
+    )[page_index]
 
 
 def pdftext_worker_threshold() -> int:

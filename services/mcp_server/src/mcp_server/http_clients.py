@@ -28,8 +28,8 @@ Documented gaps (not papered over):
   bound), and each listed document is enriched with one detail call to
   populate ``status`` / ``version`` / ``page_count``. If that N+1 pattern
   gets too chatty, add version status to document_api's list response.
-* ``POST /search`` takes no ``top_k`` — the retrieval service applies its
-  own configured result width, so ``top_k`` is applied client-side.
+* ``POST /search`` supports an optional ``top_k`` parameter and slices
+  client-side as well.
 """
 
 from __future__ import annotations
@@ -162,6 +162,20 @@ class _BaseHttpClient:
         self._secret = internal_secret
         self._timeout = timeout
         self._transport = transport
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                transport=self._transport,
+                timeout=self._timeout,
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
     def _require_secret(self, operation: str) -> str:
         if not self._secret:
@@ -180,10 +194,16 @@ class _BaseHttpClient:
         **kwargs,
     ) -> httpx.Response:
         url = f"{self._base_url}{path}"
+        client = self._get_client()
         try:
-            async with httpx.AsyncClient(
-                transport=self._transport, timeout=self._timeout
-            ) as client:
+            try:
+                response = await client.request(
+                    method, url, headers=headers, **kwargs
+                )
+            except RuntimeError:
+                # Recreate client if the event loop changed across calls.
+                self._client = None
+                client = self._get_client()
                 response = await client.request(
                     method, url, headers=headers, **kwargs
                 )
@@ -239,12 +259,15 @@ class HttpRetrievalClient(RetrievalServiceClient, _BaseHttpClient):
     ) -> list[RawPassage]:
         operation = "retrieval search"
         secret = self._require_secret(operation)
+        body: dict[str, object] = {"query": query}
+        if top_k > 8:
+            body["top_k"] = top_k
         response = await self._call(
             "POST",
             "/search",
             sign_retrieval_headers(ctx, secret),
             operation,
-            json={"query": query},
+            json=body,
         )
         self._raise_for_status(
             response,
@@ -258,8 +281,6 @@ class HttpRetrievalClient(RetrievalServiceClient, _BaseHttpClient):
             raise ServiceClientError(
                 f"{operation}: response has no 'results' list"
             )
-        # POST /search takes no limit parameter — the retrieval service
-        # applies its own configured result width, so top_k slices here.
         passages: list[RawPassage] = []
         for hit in results[:top_k]:
             passages.append(self._to_passage(hit, operation))

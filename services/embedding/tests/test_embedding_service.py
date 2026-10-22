@@ -211,3 +211,27 @@ def test_input_char_guard(client):
     resp = client.post("/embed", json={"queries": [long_text]})
     assert resp.status_code == 400
     assert "pre-chunked" in resp.json()["detail"]
+
+
+def test_embedding_service_deduplicates_and_caches_repeated_texts(monkeypatch):
+    svc = EmbeddingService(EmbeddingServiceSettings(backend="mock"))
+    calls: list[list[str]] = []
+    orig = svc._backend.embed_texts
+
+    def spy_embed_texts(texts):
+        calls.append(list(texts))
+        return orig(texts)
+
+    monkeypatch.setattr(svc._backend, "embed_texts", spy_embed_texts)
+    import asyncio
+
+    vecs1 = asyncio.run(svc.embed_queries(["same query", "same query", "other query"]))
+    assert len(vecs1) == 3
+    assert vecs1[0] == vecs1[1]
+    assert len(calls) == 1
+    assert len(calls[0]) == 2  # deduplicated before backend call
+
+    # Second call with already-cached queries hits the LRU cache without backend invocation.
+    vecs2 = asyncio.run(svc.embed_queries(["same query", "other query"]))
+    assert vecs2 == [vecs1[0], vecs1[2]]
+    assert len(calls) == 1
