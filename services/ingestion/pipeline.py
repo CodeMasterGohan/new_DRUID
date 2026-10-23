@@ -51,7 +51,10 @@ from .native_worker import (
 from .olmocr_client import OlmOcrClient, OlmOcrConfig
 from .router import PageRoute, RouterDecision, route_page, signals_to_dict
 from .tables import TableRegion
-from .tree import Node, build_tree_from_native, build_tree_from_olmocr, tree_to_markdown
+from .tree import (
+    Node, build_tree_from_markdown, build_tree_from_native, build_tree_from_olmocr,
+    tree_to_markdown,
+)
 
 log = logging.getLogger("druid.ingestion")
 
@@ -433,6 +436,19 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
     if not pdf_key:
         raise ValueError("job payload missing 'pdf_key' (S3 key of the original)")
     pdf_bytes = deps.object_store.get_bytes(pdf_key)
+    if payload.get("content_type") == "text/markdown":
+        import json
+
+        tree = build_tree_from_markdown(
+            str(version.document_id), str(version.version_number),
+            pdf_bytes.decode("utf-8-sig"))
+        deps.object_store.put_bytes(
+            f"{tenant_prefix}/trees/markdown.json",
+            json.dumps(tree.to_dict()).encode("utf-8"), "application/json")
+        deps.object_store.put_bytes(
+            f"{tenant_prefix}/trees/markdown.md", tree_to_markdown(tree).encode("utf-8"),
+            "text/markdown")
+        return {"trees": [tree], "routing": {}, "png_cache": {}, "visual_pages": []}
     import tempfile
 
     # pdftext needs a real path (file-likes can't cross the process boundary).

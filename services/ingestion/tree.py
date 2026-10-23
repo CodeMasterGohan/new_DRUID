@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 
 class NodeType(str, enum.Enum):
@@ -267,6 +268,23 @@ def build_tree_from_olmocr(
     blank-line-separated paragraphs. Tables are provenance-tagged
     ``olmocr-routed``.
     """
+    return _build_tree_from_markdown_pages(
+        document_id, document_version, results, parser="olmocr",
+        parser_revision=parser_revision, table_provenance="olmocr-routed")
+
+
+def build_tree_from_markdown(document_id: str, document_version: str, markdown: str) -> Node:
+    """Parse a Markdown upload as one logical page, without OCR provenance."""
+    return _build_tree_from_markdown_pages(
+        document_id, document_version,
+        [SimpleNamespace(page_index=0, markdown=markdown, quality_status="accepted")],
+        parser="markdown", parser_revision="markdown-v1", table_provenance=None)
+
+
+def _build_tree_from_markdown_pages(
+    document_id: str, document_version: str, results: list, *, parser: str,
+    parser_revision: str, table_provenance: str | None,
+) -> Node:
     doc = Node(
         node_id=stable_node_id(document_id, document_version, -1, "document", 0),
         type=NodeType.DOCUMENT,
@@ -275,7 +293,7 @@ def build_tree_from_olmocr(
         page_index=-1,
         bounding_box=None,
         heading_path=[],
-        parser="olmocr",
+        parser=parser,
         parser_revision=parser_revision,
     )
     heading_path: list[str] = []
@@ -288,7 +306,7 @@ def build_tree_from_olmocr(
             page_index=result.page_index,
             bounding_box=None,  # visual path has no text geometry; not fabricated
             heading_path=list(heading_path),
-            parser="olmocr",
+            parser=parser,
             parser_revision=parser_revision,
             quality_status=result.quality_status,
         )
@@ -325,10 +343,10 @@ def build_tree_from_olmocr(
                 page_index=result.page_index,
                 bounding_box=None,
                 heading_path=list(heading_path),
-                parser="olmocr",
+                parser=parser,
                 parser_revision=parser_revision,
                 quality_status=result.quality_status,
-                detection_provenance="olmocr-routed" if node_type == NodeType.TABLE else None,
+                detection_provenance=table_provenance if node_type == NodeType.TABLE else None,
                 text=text,
                 data=data,
             )

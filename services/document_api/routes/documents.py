@@ -67,7 +67,7 @@ from validation import (
     UploadTooLargeError,
     UploadValidationError,
     count_pages,
-    validate_mime,
+    validate_upload,
 )
 
 router = APIRouter()
@@ -240,7 +240,7 @@ async def upload_document(
         data = await _read_bounded(file, max_bytes)
         if not data:
             raise UploadValidationError("uploaded file is empty")
-        mime = validate_mime(data.header, file.content_type)
+        mime = validate_upload(data.stream, data.header, file.content_type, file.filename)
         page_count = count_pages(data.stream, mime)
         if page_count > settings.max_pages_per_document:
             raise UploadValidationError(
@@ -255,8 +255,8 @@ async def upload_document(
         )
         version = repo.create_version(
             doc.id,
-            parser=UPLOAD_PARSER,
-            parser_revision=UPLOAD_PARSER_REVISION,
+            parser="markdown" if mime == "text/markdown" else UPLOAD_PARSER,
+            parser_revision="markdown-v1" if mime == "text/markdown" else UPLOAD_PARSER_REVISION,
             page_count=page_count,
         )
         admit(session, doc.tenant_id, version.id, page_count, settings.quota_ingest_pages_per_day)
@@ -381,6 +381,8 @@ def _validate_declaration(
         raise UploadValidationError(
             f"unsupported declared MIME type: {body.mime_type!r}"
         )
+    if mime == "text/markdown" and not display_name.lower().endswith((".md", ".markdown")):
+        raise UploadValidationError("Markdown requires a .md or .markdown filename")
     if body.file_size_bytes < 1:
         raise UploadValidationError("file_size_bytes must be positive")
     if body.file_size_bytes > max_bytes:
@@ -596,7 +598,7 @@ async def _upload_bytes_locked(document_id, upload_ticket, file, context, sessio
             raise UploadValidationError(
                 "uploaded bytes do not match the declared SHA-256"
             )
-        mime = validate_mime(data.header, declared_mime)
+        mime = validate_upload(data.stream, data.header, declared_mime, doc.display_name)
         page_count = count_pages(data.stream, mime)
         if page_count > settings.max_pages_per_document:
             raise UploadValidationError(
@@ -616,8 +618,8 @@ async def _upload_bytes_locked(document_id, upload_ticket, file, context, sessio
         else:
             version = repo.create_version(
                 doc.id,
-                parser=UPLOAD_PARSER,
-                parser_revision=UPLOAD_PARSER_REVISION,
+                parser="markdown" if mime == "text/markdown" else UPLOAD_PARSER,
+                parser_revision="markdown-v1" if mime == "text/markdown" else UPLOAD_PARSER_REVISION,
                 page_count=page_count,
             )
             admit(session, doc.tenant_id, version.id, page_count, settings.quota_ingest_pages_per_day)

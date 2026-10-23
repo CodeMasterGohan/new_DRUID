@@ -469,3 +469,16 @@ def test_upload_session_enforces_cumulative_max_bytes():
     store.add_chunk(sess.session_id, 0, b"123456")
     with pytest.raises(ValueError, match="exceed maximum upload size"):
         store.add_chunk(sess.session_id, 1, b"12345")
+
+
+def test_markdown_browser_upload(client: TestClient, mock_gateway):
+    login_as(client, "group-a")
+    payload = b"# GitLab CI\n\nUse include:local for reusable pipelines.\n"
+    sid = _start_session(client, "gitlab.md", 1, len(payload))
+    response = client.post(f"/upload/session/{sid}/chunk?index=0",
+        files={"chunk": ("chunk", payload)})
+    assert response.status_code == 200
+    response = client.post(f"/upload/session/{sid}/complete")
+    assert response.status_code == 201, response.text
+    assert payload in mock_gateway.requests[-1].content
+    assert 'gitlab.md' in mock_gateway.requests[-1].content.decode()

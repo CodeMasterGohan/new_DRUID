@@ -33,8 +33,8 @@ router = APIRouter()
 
 # Conservative client-side pre-validation. The gateway/document_api re-validates
 # authoritatively (magic bytes, page limits); this only fails fast on obvious
-# mistakes. Extensions mirror the backend allowlist: PDF + page images.
-_ALLOWED_EXTENSIONS = (".pdf", ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif")
+# mistakes. Extensions mirror the backend allowlist: PDF, images, Markdown.
+_ALLOWED_EXTENSIONS = (".pdf", ".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".md", ".markdown")
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9._\- ]")
 
 
@@ -53,7 +53,7 @@ def _validate_upload(filename: str, size_bytes: int, max_mb: int) -> str | None:
     lowered = filename.lower()
     if not lowered.endswith(_ALLOWED_EXTENSIONS):
         return (
-            "unsupported file type (PDF, PNG, JPEG, WebP, TIFF). "
+            "unsupported file type (PDF, PNG, JPEG, WebP, TIFF, Markdown). "
             "The backend re-validates by file contents."
         )
     return None
