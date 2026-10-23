@@ -392,15 +392,18 @@ def test_shared_network_for_ingestion_to_vllm():
 
 def test_only_allowlisted_services_publish_host_ports():
     """James's rule (2026-10-09): no host port unless a client-side consumer
-    needs it. Only the web UI (browser) and the two MCP servers (his AI CLI)
-    publish; everything else is container-to-container on the compose/cora
-    networks."""
+    needs it. The optional authenticated SAGE admin UI may also publish
+    its loopback port when the admin profile is explicitly enabled."""
     allowed = {
         "druid-cpu": {"web_ui", "gateway"},
         "druid-gpu": set(),
-        "sage": {"mcp-server"},
+        "sage": {"mcp-server", "admin-api"},
     }
     for label, compose, env in compose_files():
+        if label == "sage" and "admin-api" in compose["services"]:
+            admin = compose["services"]["admin-api"]
+            assert admin.get("profiles") == ["admin"]
+            assert env.get("ADMIN_BIND_IP", "127.0.0.1") == "127.0.0.1"
         for service, port in effective_host_ports(compose, env):
             assert service in allowed[label], (
                 f"{label}/{service} publishes host port {port} but is not "

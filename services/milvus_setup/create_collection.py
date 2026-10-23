@@ -43,6 +43,7 @@ from .schema import (
     COLLECTION_ALIAS,
     COLLECTION_NAME,
     DENSE_DIM,
+    INDEX_SPECS,
     PARTITION_ISOLATION_PROPERTY,
     PARTITION_KEY_FIELD,
     build_index_params,
@@ -156,8 +157,11 @@ def ensure_indexes(client, collection: str) -> None:
     """Create any missing indexes (dense HNSW + sparse BM25)."""
     from pymilvus.milvus_client.index import IndexParams
 
-    existing = {idx["field_name"] for idx in client.list_indexes(collection)}
-    missing = [s for s in build_index_params() if s["field_name"] not in existing]
+    existing = {
+        client.describe_index(collection, index_name)["field_name"]
+        for index_name in client.list_indexes(collection)
+    }
+    missing = [s for s in INDEX_SPECS if s["field_name"] not in existing]
     if not missing:
         log.info("all indexes already exist on %r — skipping", collection)
         return

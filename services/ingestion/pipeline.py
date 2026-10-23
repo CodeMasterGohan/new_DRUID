@@ -45,7 +45,9 @@ from .embeddings import (
     build_document_text,
     make_page_image_record,
 )
-from .native_worker import NativePage, extract_pages_native, extract_tables_native
+from .native_worker import (
+    NativePage, extract_pages_native, extract_tables_native, supports_native_tables,
+)
 from .olmocr_client import OlmOcrClient, OlmOcrConfig
 from .router import PageRoute, RouterDecision, route_page, signals_to_dict
 from .tables import TableRegion
@@ -53,7 +55,7 @@ from .tree import Node, build_tree_from_native, build_tree_from_olmocr, tree_to_
 
 log = logging.getLogger("druid.ingestion")
 
-PARSER_REVISION_NATIVE = "pdftext-0.4.2+router-v1"
+PARSER_REVISION_NATIVE = "pdftext-0.4.1+router-v1"
 PARSER_REVISION_OLMOCR = "olmocr-2-7b-1025-fp8+router-v1"
 
 _SESSION_MAKER_LOCK = threading.Lock()
@@ -270,6 +272,7 @@ def build_production_deps() -> PipelineDeps:
     if missing:
         raise RuntimeError("production ingestion missing: " + ", ".join(missing))
     return PipelineDeps(
+        config=IngestionConfig.from_env(),
         embedding_backend=SentenceTransformersGemmaBackend(),
         index_sink=MilvusIndexSink(
             os.environ["MILVUS_URI"],
@@ -459,6 +462,13 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
             ]
             if decision.route == PageRoute.SKIP_BLANK:
                 continue
+            if page.geometry.table_regions and not supports_native_tables():
+                routing[page.page_index]["route"] = PageRoute.VISUAL.value
+                routing[page.page_index]["reasons"] = [
+                    *decision.reasons, "native_table_extraction_unavailable",
+                ]
+                visual_pages.append(page.page_index)
+                continue
             if (decision.route == PageRoute.VISUAL
                     or (deps.route_low_confidence_tables_to_visual and low_conf_tables
                         and decision.signals.table_area_ratio >= deps.config.router.table_area_ratio_heavy
@@ -481,6 +491,32 @@ def _parse_document(repo, job: Job, version, tenant_prefix: str,
             trees.append(build_tree_from_native(
                 str(version.document_id), str(version.version_number), native_pages,
                 table_texts, parser_revision=PARSER_REVISION_NATIVE))
+
+        if visual_pages and deps.config.processing_mode == "cpu":
+            # Keep the original routing decision and park the whole version;
+            # CPU mode must never index a partially parsed document as READY.
+            rendered_batch = render_pages_png(
+                pdf_path, visual_pages,
+                longest_dim_px=deps.config.olmocr.render_longest_dim_px,
+            )
+            for page_index in visual_pages:
+                render_key = f"{tenant_prefix}/renders/page-{page_index:04d}.png"
+                deps.object_store.put_bytes(render_key, rendered_batch[page_index], "image/png")
+                repo.quarantine_page(
+                    document_id=version.document_id,
+                    document_version_id=version.id,
+                    job_id=job.id,
+                    page_index=page_index,
+                    page_render_ref=render_key,
+                    parse_attempts={"visual": {
+                        "status": "deferred",
+                        "processing_mode": "cpu",
+                        "error": "Visual OCR requires DRUID_PROCESSING_MODE=gpu and a ready OCR service",
+                    }},
+                    routing_diagnostics=routing[page_index],
+                )
+            session.commit()
+            raise _ReviewRequired("CPU mode: visual OCR pages deferred for review")
 
         # Visual path: render → olmOCR → tree; low quality → quarantine.
         if visual_pages:

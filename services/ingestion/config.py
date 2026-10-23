@@ -92,6 +92,14 @@ class IngestionConfig:
     olmocr: OlmOcrSettings = field(default_factory=OlmOcrSettings)
     embeddings: EmbeddingSettings = field(default_factory=EmbeddingSettings)
 
+    # Existing deployments use GPU-backed visual OCR. CPU mode keeps native
+    # parsing but parks OCR-required pages for review without calling vLLM.
+    processing_mode: str = "gpu"
+
+    def __post_init__(self) -> None:
+        if self.processing_mode not in ("cpu", "gpu"):
+            raise ValueError("DRUID_PROCESSING_MODE must be 'cpu' or 'gpu'")
+
     # pdftext parallel extraction only engages when each worker gets at
     # least this many pages (pdftext default; overridable via
     # PDFTEXT_WORKER_PAGE_THRESHOLD). Below it, extraction is serial —
@@ -135,6 +143,7 @@ class IngestionConfig:
             prose_overlap_tokens=_int("CHUNK_OVERLAP_TOKENS", 48),
         )
         return cls(
+            processing_mode=os.environ.get("DRUID_PROCESSING_MODE", "gpu").strip().lower(),
             router=router,
             chunker=chunker,
             pdftext_workers=_int("PDFTEXT_WORKERS", 4),

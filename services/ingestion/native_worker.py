@@ -39,13 +39,19 @@ class NativePage:
 def _require_pdftext():
     try:
         import pdftext  # noqa: F401
-        from pdftext.extraction import dictionary_output, table_output
+        from pdftext import extraction
     except ImportError as exc:
         raise RuntimeError(
             "pdftext is required for native extraction but is not installed. "
             "Install it from the pinned requirements (no model downloads involved)."
         ) from exc
-    return dictionary_output, table_output
+    # pdftext 0.4.1 provides native text extraction but no table_output.
+    # Keep text parsing usable and report table capability separately.
+    return extraction.dictionary_output, getattr(extraction, "table_output", None)
+
+
+def supports_native_tables() -> bool:
+    return _require_pdftext()[1] is not None
 
 
 def extract_pages_native(
@@ -143,9 +149,11 @@ def extract_tables_native(
     Returns:
         page index → list of extracted table texts (one per region).
     """
-    _, table_output = _require_pdftext()
     if not regions_by_page:
         return {}
+    _, table_output = _require_pdftext()
+    if table_output is None:
+        raise RuntimeError("installed pdftext has no table_output; route table pages to visual OCR")
     table_inputs = []
     pages = sorted(regions_by_page)
     for page_index in pages:

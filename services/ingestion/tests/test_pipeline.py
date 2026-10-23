@@ -78,6 +78,7 @@ def _canned_success(monkeypatch, n_records=5):
         lambda *a, **k: {"trees": [], "routing": {}, "png_cache": {},
                          "visual_pages": []},
     )
+
     monkeypatch.setattr(pipeline, "_chunk_trees", lambda trees, deps: [])
     monkeypatch.setattr(
         pipeline, "_embed_chunks",
@@ -85,6 +86,31 @@ def _canned_success(monkeypatch, n_records=5):
             {"chunk_id": f"tenant-a:c{i}"} for i in range(n_records)
         ],
     )
+
+
+def test_cpu_visual_document_is_parked_without_indexing(job_setup, monkeypatch):
+    from services.catalog.models import DocumentVersion
+    from services.ingestion.config import IngestionConfig
+    from .test_cpu_mode import _pdf_bytes
+
+    maker, job_id, version_id = job_setup
+    store = MemoryObjectStore()
+    store.put_bytes('tenant-a/doc/v1/original.pdf', _pdf_bytes(['Sparse page needs OCR']))
+    sink = LoggingIndexSink()
+    deps = PipelineDeps(config=IngestionConfig(processing_mode='cpu'),
+                        object_store=store, index_sink=sink)
+    monkeypatch.setattr(pipeline, 'OlmOcrClient',
+                        lambda *a, **kw: pytest.fail('CPU job contacted GPU OCR'))
+    assert run_ingestion_job(str(job_id), session_factory=maker, deps=deps) == 'REVIEW_REQUIRED'
+    session = maker()
+    try:
+        job = session.get(Job, job_id)
+        assert job.state == IngestionState.REVIEW_REQUIRED
+        assert session.get(pipeline.Document, job.document_id).active_version_id is None
+        assert sink.indexed == []
+        assert session.get(DocumentVersion, version_id).status == IngestionState.REVIEW_REQUIRED
+    finally:
+        session.close()
 
 
 def test_happy_path_reaches_ready(job_setup, monkeypatch):

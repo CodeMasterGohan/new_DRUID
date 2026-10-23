@@ -223,6 +223,7 @@ services:
     env_file:
     - ../.env
     environment:
+      DRUID_PROCESSING_MODE: ${DRUID_PROCESSING_MODE:-gpu}
       EMBEDDING_MODEL_PATH: /models/google/embeddinggemma-2
       MINILM_TOKENIZER_PATH: /models/cross-encoder/ms-marco-MiniLM-L6-v2
     volumes:
