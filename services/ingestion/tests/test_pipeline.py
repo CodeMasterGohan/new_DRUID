@@ -88,14 +88,24 @@ def _canned_success(monkeypatch, n_records=5):
     )
 
 
-def test_cpu_visual_document_is_parked_without_indexing(job_setup, monkeypatch):
+@pytest.mark.parametrize('input_kind', ['sparse', 'scan'])
+def test_cpu_visual_document_is_parked_without_indexing(
+    job_setup, monkeypatch, tmp_path, input_kind,
+):
     from services.catalog.models import DocumentVersion
     from services.ingestion.config import IngestionConfig
     from .test_cpu_mode import _pdf_bytes
+    from .test_scanned_page_routing import write_image_and_blank_pdf
 
     maker, job_id, version_id = job_setup
     store = MemoryObjectStore()
-    store.put_bytes('tenant-a/doc/v1/original.pdf', _pdf_bytes(['Sparse page needs OCR']))
+    if input_kind == 'scan':
+        path = tmp_path / 'scan.pdf'
+        write_image_and_blank_pdf(path)
+        pdf_bytes = path.read_bytes()
+    else:
+        pdf_bytes = _pdf_bytes(['Sparse page needs OCR'])
+    store.put_bytes('tenant-a/doc/v1/original.pdf', pdf_bytes)
     sink = LoggingIndexSink()
     deps = PipelineDeps(config=IngestionConfig(processing_mode='cpu'),
                         object_store=store, index_sink=sink)

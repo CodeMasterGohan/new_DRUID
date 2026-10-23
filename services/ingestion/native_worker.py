@@ -86,12 +86,28 @@ def extract_pages_native(
 
     raw_pages: list[dict] = dictionary_output(pdf_path, **kwargs)
     pages: list[NativePage] = []
-    for raw in raw_pages:
-        page = _normalize_page(raw)
-        # Pre-detect table regions so the router can see table signals.
-        lines = [ln for b in page.geometry.blocks for ln in b.lines]
-        page.geometry.table_regions = detect_table_regions(lines)
-        pages.append(page)
+    # pdftext supplies text geometry, not evidence that an empty text layer
+    # belongs to a scanned image. Inspect page objects before calling it blank.
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(pdf_path)
+    try:
+        for raw in raw_pages:
+            page = _normalize_page(raw)
+            pdf_page = pdf[page.page_index]
+            try:
+                page.geometry.has_visual_content = any(
+                    obj.type != pdfium.raw.FPDF_PAGEOBJ_TEXT
+                    for obj in pdf_page.get_objects()
+                )
+            finally:
+                pdf_page.close()
+            # Pre-detect table regions so the router can see table signals.
+            lines = [ln for b in page.geometry.blocks for ln in b.lines]
+            page.geometry.table_regions = detect_table_regions(lines)
+            pages.append(page)
+    finally:
+        pdf.close()
     return pages
 
 

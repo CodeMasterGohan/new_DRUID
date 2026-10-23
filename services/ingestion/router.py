@@ -57,6 +57,8 @@ class PageGeometry:
     blocks: list[TextBlock] = field(default_factory=list)
     # Detected table regions (from tables.detect_table_regions).
     table_regions: list[TableRegion] = field(default_factory=list)
+    # Images/vector objects may carry a scanned page with no text layer.
+    has_visual_content: bool = False
 
 
 @dataclass
@@ -103,7 +105,7 @@ def compute_signals(page: PageGeometry) -> RouterSignals:
     full_text = "\n".join(b.text for b in page.blocks)
     total_chars = len(full_text)
     signals.text_density = total_chars / area_sqin
-    signals.is_blank = total_chars == 0
+    signals.is_blank = total_chars == 0 and not page.has_visual_content
 
     if total_chars:
         bad = sum(
