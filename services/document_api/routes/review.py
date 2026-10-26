@@ -6,6 +6,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from services.catalog.errors import (
@@ -67,6 +68,25 @@ def list_review_items(
     return ReviewItemListResponse(
         items=[_to_summary(i) for i in items], limit=limit, offset=offset
     )
+
+
+@router.get("/v1/review/items/{item_id}/render")
+def get_review_render(
+    item_id: uuid.UUID,
+    repo: CatalogRepository = Depends(get_repository),
+    store: ObjectStore = Depends(get_object_store),
+):
+    """Read a tenant-scoped page render without exposing private storage URLs."""
+    try:
+        item = repo.get_quarantine_item(item_id)
+    except NotFoundError:
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        data = store.get_bytes(item.page_render_ref)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="page render unavailable") from exc
+    return Response(data, media_type="image/png", headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/v1/review/items/{item_id}", response_model=ReviewItemDetail)

@@ -83,7 +83,7 @@ class DruidApiClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self.aclose()
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    async def _request(self, method: str, path: str, *, raw: bool = False, **kwargs: Any) -> Any:
         client = self._client()
         try:
             try:
@@ -102,6 +102,8 @@ class DruidApiClient:
             except Exception:
                 detail = resp.text[:200]
             raise ApiError(resp.status_code, detail)
+        if raw:
+            return resp.content
         if not resp.content:
             return None
         try:
@@ -182,6 +184,9 @@ class DruidApiClient:
     async def get_review_item(self, item_id: str) -> dict:
         return await self._request("GET", f"/v1/review/items/{item_id}")
 
+    async def get_review_render(self, item_id: str) -> bytes:
+        return await self._request("GET", f"/v1/review/items/{item_id}/render", raw=True)
+
     async def resolve_review_item(
         self, item_id: str, decision: str, note: str | None = None
     ) -> dict:
@@ -207,7 +212,8 @@ class DruidApiClient:
                 "arguments": {"query": query, "top_k": top_k},
             },
         }
-        data = await self._request("POST", "/mcp", json=payload)
+        data = await self._request("POST", "/mcp", json=payload,
+            headers={"Accept": "application/json, text/event-stream"})
         try:
             text = data["result"]["content"][0]["text"]
         except (KeyError, IndexError, TypeError) as exc:

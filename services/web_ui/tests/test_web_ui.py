@@ -94,6 +94,22 @@ def test_logout_clears_cookie(client: TestClient):
 # ---------------------------------------------------------------------------
 
 
+def test_review_render_stays_on_authenticated_ui_origin(client, mock_gateway):
+    path = '/review/item-1/render'
+    assert client.get(path, follow_redirects=False).status_code == 303
+    token = login_as(client, 'group-a')
+    page = _html(client.get('/review/item-1'))
+    assert 'src="/review/item-1/render"' in page
+    assert 'src="http://rustfs' not in page
+    response = client.get(path)
+    assert response.status_code == 200 and response.content.startswith(b'\x89PNG')
+    assert response.headers['content-type'] == 'image/png'
+    assert response.headers['cache-control'] == 'private, no-store'
+    request = mock_gateway.requests[-1]
+    assert request.url.path == '/v1/review/items/item-1/render'
+    assert request.headers['authorization'] == 'Bearer '+token
+
+
 def test_spoofed_tenant_headers_ignored(
     client: TestClient, mock_gateway
 ):

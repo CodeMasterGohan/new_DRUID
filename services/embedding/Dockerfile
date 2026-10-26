@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     OMP_NUM_THREADS=8
 WORKDIR /app
 COPY services/embedding/requirements.txt .
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 \
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 torchvision==0.29.1 \
  && pip install --no-cache-dir -r requirements.txt
 COPY services/__init__.py /app/services/__init__.py
 # §8 prefix contract lives in the ingestion sibling (single source of truth).

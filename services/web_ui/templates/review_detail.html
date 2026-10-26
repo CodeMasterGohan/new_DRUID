@@ -5,9 +5,9 @@
 <p class="muted">Document <a href="/documents/{{ item.document_id }}"><code>{{ item.document_id[:8] }}…</code></a>
   · page {{ item.page_index }} · status <strong>{{ item.status }}</strong></p>
 
-{% if item.page_render_url %}
+{% if item.page_render_key %}
 <h2>Page render</h2>
-<img src="{{ item.page_render_url }}" alt="page render" class="render">
+<img src="/review/{{ item.item_id }}/render" alt="page render" class="render">
 {% endif %}
 
 <h2>Parse attempts</h2>

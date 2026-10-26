@@ -8,8 +8,7 @@ Transport security (§11):
   specification. Absent Origin (native clients) is permitted.
 - Spoofable identity headers (``X-User-Id``, ``X-Group-Id``, ...) are
   stripped: identity comes only from the validated token, never headers.
-- MCP session IDs (``mcp-session-id``) are managed by the transport and are
-  NEVER used as an authentication identity.
+- HTTP requests are stateless; identity is revalidated on every request.
 - A server-side request_id is generated per request for tracing.
 
 The stdio adapter (``stdio_adapter.py``) is a SEPARATE entrypoint with its
@@ -26,12 +25,12 @@ import time
 from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount
 
 from .auth import AuthError, TokenVerifier, JWTVerifier, context_from_claims
 from .clients import (
@@ -372,7 +371,14 @@ def create_app(
         settings.downstream_timeout_seconds,
     )
 
-    mcp = FastMCP("new-druid")
+    # The Web UI makes authenticated single-request JSON tool calls. Native
+    # MCP clients can still initialize, but no session ID is required.
+    mcp = FastMCP("new-druid", stateless_http=True, json_response=True,
+                 transport_security=TransportSecuritySettings(
+        allowed_hosts=["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*",
+                       "mcp_server", "mcp_server:*"],
+        allowed_origins=list(settings.allowed_origins),
+    ))
     _register_tools(mcp, deps)
 
     verifier = JWTVerifier(
@@ -381,8 +387,9 @@ def create_app(
         issuer=settings.jwt_issuer,
         audience=settings.jwt_audience,
     )
-    inner = mcp.streamable_http_app()
-    app = Starlette(routes=[Mount("/mcp", app=inner)])
+    # The SDK app owns /mcp and the session-manager lifespan. Wrapping it in
+    # another /mcp mount duplicates the route and drops its startup lifecycle.
+    app = mcp.streamable_http_app()
     app.add_middleware(
         AuthMiddleware, verifier=verifier, allowed_origins=settings.allowed_origins,
         gateway_secret=settings.internal_secret if settings.gateway_internal_auth else "",

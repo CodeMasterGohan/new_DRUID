@@ -12,6 +12,22 @@ from services.ingestion.embeddings import (
 from services.ingestion.identifiers import IdentifierExtractor, extract_identifiers
 
 
+def test_production_vectors_normalize_after_low_precision_encode(tmp_path):
+    import math
+    from types import SimpleNamespace
+    from services.ingestion.config import EmbeddingSettings
+    from services.ingestion.embeddings import SentenceTransformersGemmaBackend
+
+    # A representative BF16-normalized row can still drift past the API's
+    # 1e-3 L2 tolerance after conversion to ordinary Python floats.
+    raw = [1.001953125] + [0.0] * 767
+    backend = SentenceTransformersGemmaBackend(EmbeddingSettings(), str(tmp_path))
+    backend._model = SimpleNamespace(encode=lambda *args, **kwargs: [raw])
+    vector = backend.embed_texts(['query'])[0]
+    assert len(vector) == 768
+    assert abs(math.sqrt(sum(value*value for value in vector))-1) < 1e-6
+
+
 def _chunk(text, content_type=None, heading_path=None):
     return Chunk(
         chunk_id="c1", document_id="d", document_version="v1", parent_id="n1",

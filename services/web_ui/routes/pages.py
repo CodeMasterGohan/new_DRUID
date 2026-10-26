@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from api_client import AdminNotAvailable, ApiError
 from deps import NotAuthenticated
@@ -193,6 +193,21 @@ async def review_detail_page(request: Request, item_id: str):
     return get_templates().TemplateResponse(
         "review_detail.html", page_context(request, identity, item=item)
     )
+
+
+@router.get("/review/{item_id}/render")
+async def review_render(request: Request, item_id: str):
+    try:
+        identity = current_identity(request)
+    except NotAuthenticated:
+        return login_redirect(request)
+    try:
+        async with api_for(identity, request) as client:
+            data = await client.get_review_render(item_id)
+    except ApiError as exc:
+        return _handle_api_error(request, exc)
+    return Response(data, media_type="image/png", headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/review/{item_id}/resolve")

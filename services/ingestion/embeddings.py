@@ -239,10 +239,10 @@ class SentenceTransformersGemmaBackend(EmbeddingBackend):
         width = self.settings.dimension
         if width not in self.settings.allowed_matryoshka_widths:
             raise ValueError(f"unvalidated Matryoshka width: {width}")
-        if width == 768 or len(vector) <= width:
-            return vector
-        truncated = vector[:width]
+        truncated = vector if width == 768 or len(vector) <= width else vector[:width]
         if self.settings.normalize:
+            # encode() can normalize in BF16. Normalize again after conversion
+            # to Python floats so full-width and truncated rows meet the L2 contract.
             norm = math.sqrt(sum(v * v for v in truncated)) or 1.0
             truncated = [v / norm for v in truncated]
         return truncated

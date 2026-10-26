@@ -271,6 +271,21 @@ def _seed_quarantine_item(session_factory, object_store):
 
 
 class TestReviewQueue:
+    def test_render_is_authenticated_tenant_scoped_png(self, client, auth_headers, settings,
+                                                     session_factory, object_store):
+        item_id, _ = _seed_quarantine_item(session_factory, object_store)
+        image = b'\x89PNG\r\n\x1a\nfixture'
+        object_store.put_bytes('tenant-a/render.png', image, 'image/png')
+        path = f'/v1/review/items/{item_id}/render'
+        assert client.get(path).status_code == 401
+        foreign = signed_headers(settings.internal_secret, group_id='tenant-b')
+        assert client.get(path, headers=foreign).status_code == 404
+        response = client.get(path, headers=auth_headers)
+        assert response.status_code == 200 and response.content == image
+        assert response.headers['content-type'] == 'image/png'
+        assert response.headers['cache-control'] == 'private, no-store'
+        assert response.headers['x-content-type-options'] == 'nosniff'
+
     def test_list_review_items(self, client, auth_headers, session_factory,
                                object_store):
         item_id, _ = _seed_quarantine_item(session_factory, object_store)

@@ -17,4 +17,5 @@ structlog==25.1.0
 pytest==9.1.1
 # CrossEncoder loads only pre-staged local model paths.
 sentence-transformers==6.1.0
-transformers==5.18.0
+# 5.18.0 cannot recognize embedding_gemma2; 5.20.2 registers the released model.
+transformers==5.20.2

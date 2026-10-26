@@ -186,6 +186,10 @@ class MockGateway:
                 json={"item_id": "item-1", "status": body.get("decision"), "reviewed_by": "u1"},
             )
 
+        if path.startswith("/v1/review/items/") and path.endswith('/render') and method == 'GET':
+            return httpx.Response(200, content=b'\x89PNG\r\n\x1a\nfixture',
+                                  headers={'Content-Type': 'image/png'})
+
         if path.startswith("/v1/review/items/") and method == "GET":
             return httpx.Response(
                 200,
@@ -207,6 +211,9 @@ class MockGateway:
             )
 
         if path == "/mcp" and method == "POST":
+            accept = request.headers.get('accept', '')
+            if 'application/json' not in accept or 'text/event-stream' not in accept:
+                return httpx.Response(406, json={'detail': 'MCP Accept header required'})
             passages = [
                 {
                     "provenance": {

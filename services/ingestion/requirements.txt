@@ -27,8 +27,10 @@ pymilvus==2.5.6  # required by real MilvusIndexSink
 # pre-staged artifact paths (EMBEDDING_MODEL_PATH, MINILM_TOKENIZER_PATH)
 # exist. Regenerate pins with pip-compile before release.
 sentence-transformers==6.1.0
-transformers==5.18.0
+# 5.18.0 cannot recognize embedding_gemma2; 5.20.2 registers the released model.
+transformers==5.20.2
 torch==2.14.1  # matches the embedding service; CPU-index install in Dockerfile
+torchvision==0.29.1  # CPU wheel; required by EmbeddingGemma2VideoProcessor.
 # olmOCR toolkit: prompt builders only (never hand-rolled prompts, §5).
 # The vLLM server does inference; this client only builds prompts.
 olmocr==0.4.27  # 0.4.0 was never published to PyPI; 0.4.2 pins transformers==4.55.2, conflicting with the EmbeddingGemma 2 transformers 5.x requirement. 0.4.27 keeps transformers under the 'gpu' extra only, and its build_no_anchoring_v4_yaml_prompt is byte-identical to 0.4.2's (verified 2026-10-08).
