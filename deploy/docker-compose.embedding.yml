@@ -1,0 +1,55 @@
+# Start once for BOTH new_DRUID and new_sage; keep this project name fixed.
+# Do not merge this file into either application's Compose project.
+name: shared-embedding
+
+services:
+  vllm-embedding:
+    image: vllm/vllm-openai:v0.32.0
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_API_KEY: ${EMBEDDING_VLLM_API_KEY:-}
+    volumes:
+    - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
+    command:
+    - /models/google/embeddinggemma-2
+    - --served-model-name
+    - ${EMBEDDING_MODEL_ID:-google/embeddinggemma-2}
+    - --runner
+    - pooling
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --max-model-len
+    - "8192"
+    - --gpu-memory-utilization
+    - ${EMBEDDING_VLLM_GPU_MEMORY_UTILIZATION:-0.15}
+    - --chat-template
+    - /models/google/embeddinggemma-2/chat_template.jinja
+    - --chat-template-content-format
+    - openai
+    - --limit-mm-per-prompt
+    - '{"image":1,"audio":0,"video":0}'
+    shm_size: 2gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            device_ids: ["${EMBEDDING_VLLM_GPU_ID:-0}"]
+            capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    restart: unless-stopped
+    networks:
+    - embedding-net
+
+networks:
+  embedding-net:
+    name: embedding-net
+    external: true

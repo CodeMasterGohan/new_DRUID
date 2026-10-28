@@ -1,9 +1,11 @@
 # Embedding service — EmbeddingGemma 2 (spec §8)
 
-Standalone CPU FastAPI service. **CPU ONLY** (§2 GPU arbitration): the H200
-belongs to vLLM/olmOCR. This service must never request GPU resources —
-torch is installed from the CPU index and the backend is constructed with
-`device="cpu"`.
+A lightweight FastAPI adapter for the shared Docker vLLM pooling server used
+by DRUID and SAGE. Default `EMBEDDING_BACKEND=vllm` serves the existing
+`google/embeddinggemma-2` checkpoint. This adapter applies task prefixes and
+preserves DRUID's API; the shared server owns model weights and GPU inference.
+DRUID ingestion uses the same remote backend for chunk and page-image vectors.
+See [shared deployment](../../deploy/shared-embedding.md) for setup and smoke checks.
 
 ## The §8 contract (read this before touching prefixes)
 
@@ -35,20 +37,25 @@ byte-equality with the sibling's formatters.
 | `EMBEDDING_MODEL_PATH` | (required for `st`) | Pre-staged artifact dir, read-only mount. `EMBEDDING_MODEL_DIR` accepted as alias. |
 | `EMBEDDING_MODALITY_CONFIG` | `text+image` | or `text-only` (fallback) |
 | `EMBEDDING_DIMENSION` | `768` | Must be a validated Matryoshka width (768/512/256/128) |
-| `EMBEDDING_BACKEND` | `st` | `st` = sentence-transformers; `mock` = deterministic fake (tests/dev) |
+| `EMBEDDING_BACKEND` | `vllm` | `st` = optional local CPU backend; `mock` = tests/dev |
+| `EMBEDDING_MODEL_ID` | `google/embeddinggemma-2` | Must match vLLM's served model name |
+| `EMBEDDING_VLLM_URL` | `http://vllm-embedding:8000/v1` | OpenAI base URL including `/v1` |
+| `EMBEDDING_VLLM_API_KEY` | empty | Optional shared server key |
+| `EMBEDDING_VLLM_TIMEOUT_S` | `120` | Positive finite request timeout |
 | `EMBEDDING_BATCH_SIZE` | `32` | |
 | `EMBEDDING_MAX_CONCURRENCY` | `4` | semaphore around the encode lock |
 | `EMBEDDING_MAX_INPUT_CHARS` | `32768` | hard reject above this — inputs arrive pre-chunked (§7) |
 | `EMBEDDING_PORT` | `8003` | |
 
-Startup **fails fast** when the artifact is missing/invalid — production
-services never download at runtime (§3, `HF_HUB_OFFLINE=1`).
+Startup makes a real embedding request and **fails** if the shared server is
+unavailable or returns invalid vectors. There is no fallback to local inference.
+For `st`, startup fails when the pre-staged artifact is missing/invalid.
 
 ## Matryoshka
 
 Coded for 768 dims. A validated width change (512/256/128) plugs into
 `EMBEDDING_DIMENSION` with re-normalization; the service verifies the first
-vector's width and normalization and fails closed on mismatch. Any width
+vector's width and normalization and fails closed on mismatch. The vLLM client validates every returned row, requests native 768-wide vectors without the unsupported `dimensions` API option, then truncates and re-normalizes locally. Any width
 change requires full re-embedding per the migration rule — the service will
 not silently mix widths.
 
@@ -58,3 +65,9 @@ The image copies the sibling contract files
 (`services/ingestion/{embeddings,config,chunker,tree,identifiers}.py`)
 **without** `services/ingestion/__init__.py` (which would import pdftext and
 other heavy deps). `reuse.py` loads them without executing the package init.
+
+
+The default image has no torch or sentence-transformers. To run the optional
+local backend, rebuild with `--build-arg INSTALL_LOCAL_EMBEDDINGS=true`, set
+`EMBEDDING_BACKEND=st`, and mount the artifact read-only at
+`EMBEDDING_MODEL_PATH`. `mock` is for tests only.

@@ -1,15 +1,12 @@
-"""EmbeddingGemma 2 CPU service — FastAPI app (spec §8).
-
-CPU ONLY (§2 GPU arbitration): the H200 belongs to vLLM/olmOCR. This
-service must never request GPU resources.
+"""EmbeddingGemma 2 API adapter — shared vLLM inference by default.
 
 Endpoints:
   POST /embed       — embed texts with the §8 contractual task prefixes
   POST /embed_image — embed a page render into the unified vector space
   GET  /health      — model/card status (fail-closed)
 
-Startup fails fast when the pre-staged artifact is missing or invalid —
-production services never download at runtime (§3).
+Startup verifies the configured backend with an embedding request. An
+unavailable shared server fails startup without falling back to local inference.
 """
 
 from __future__ import annotations
@@ -81,7 +78,7 @@ async def lifespan(app: FastAPI):
     global service
     settings = EmbeddingServiceSettings()
     log.info(
-        "starting embedding service: model=%s modality=%s dim=%d backend=%s device=cpu",
+        "starting embedding service: model=%s modality=%s dim=%d backend=%s",
         settings.model_id,
         settings.modality_config,
         settings.dimension,

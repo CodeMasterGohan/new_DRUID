@@ -1,6 +1,6 @@
 # new_DRUID infrastructure + CPU services.
-# GPU inference (vLLM/olmOCR) lives in docker-compose.gpu.yml — it is the ONLY
-# GPU consumer per spec §2 and must never share the card uncontended.
+# GPU inference uses separate OCR and shared embedding Compose projects.
+# Start docker-compose.embedding.yml once for both DRUID and SAGE.
 name: druid
 
 services:
@@ -185,18 +185,22 @@ services:
     build:
       context: ..
       dockerfile: services/embedding/Dockerfile
+      args:
+        INSTALL_LOCAL_EMBEDDINGS: ${INSTALL_LOCAL_EMBEDDINGS:-false}
     env_file:
     - ../.env
     environment:
-      EMBEDDING_MODEL_PATH: /models/google/embeddinggemma-2
-      EMBEDDING_MODEL_DIR: /models/google/embeddinggemma-2
-    volumes:
-      # Host artifact registry, READ-ONLY. Missing models fail startup.
-    - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-vllm}
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID:-google/embeddinggemma-2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      EMBEDDING_VLLM_URL: ${EMBEDDING_VLLM_URL:-http://vllm-embedding:8000/v1}
+      EMBEDDING_VLLM_API_KEY: ${EMBEDDING_VLLM_API_KEY:-}
+      EMBEDDING_VLLM_TIMEOUT_S: ${EMBEDDING_VLLM_TIMEOUT_S:-120}
     restart: unless-stopped
 
     networks:
     - default
+    - embedding-net
   retrieval:
     build:
       context: ..
@@ -224,7 +228,12 @@ services:
     - ../.env
     environment:
       DRUID_PROCESSING_MODE: ${DRUID_PROCESSING_MODE:-gpu}
-      EMBEDDING_MODEL_PATH: /models/google/embeddinggemma-2
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-vllm}
+      EMBEDDING_MODEL_ID: ${EMBEDDING_MODEL_ID:-google/embeddinggemma-2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      EMBEDDING_VLLM_URL: ${EMBEDDING_VLLM_URL:-http://vllm-embedding:8000/v1}
+      EMBEDDING_VLLM_API_KEY: ${EMBEDDING_VLLM_API_KEY:-}
+      EMBEDDING_VLLM_TIMEOUT_S: ${EMBEDDING_VLLM_TIMEOUT_S:-120}
       MINILM_TOKENIZER_PATH: /models/cross-encoder/ms-marco-MiniLM-L6-v2
     volumes:
     - ${MODEL_DIR:-/DATA/docker/mounts/models}:/models:ro
@@ -239,11 +248,15 @@ services:
       #   docker network create druid-net
     - default
     - druid-net
+    - embedding-net
     restart: unless-stopped
     # Scale CPU workers: docker compose up -d --scale ingestion=4
 
 
 networks:
+  embedding-net:
+    name: embedding-net
+    external: true
   druid-net:
     name: druid-net
     external: true

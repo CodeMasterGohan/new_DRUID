@@ -34,6 +34,7 @@ def test_production_worker_reads_processing_mode(monkeypatch):
                  'RUSTFS_ACCESS_KEY', 'RUSTFS_SECRET_KEY', 'RUSTFS_BUCKET', 'MILVUS_URI'):
         monkeypatch.setenv(name, 'test-fixture')
     monkeypatch.setenv('DRUID_PROCESSING_MODE', 'cpu')
+    monkeypatch.setenv('EMBEDDING_BACKEND', 'st')
     monkeypatch.setattr(embeddings, 'SentenceTransformersGemmaBackend', Mock())
     monkeypatch.setattr(milvus_sink, 'MilvusIndexSink', Mock())
     monkeypatch.setattr(pipeline, 'RustFSObjectStore', Mock())

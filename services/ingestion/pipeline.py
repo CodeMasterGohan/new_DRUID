@@ -265,18 +265,49 @@ def _transition(repo: CatalogRepository, job: Job, version_id: uuid.UUID,
 
 def build_production_deps() -> PipelineDeps:
     """RQ workers must not run with mock embeddings or a logging-only sink."""
+    from dataclasses import replace
+
+    from services.embedding.settings import EmbeddingServiceSettings
+
     from .embeddings import SentenceTransformersGemmaBackend
     from .milvus_sink import MilvusIndexSink
+    from .vllm_backend import VllmEmbeddingBackend
 
-    required = ("EMBEDDING_MODEL_PATH", "MINILM_TOKENIZER_PATH",
+    settings = EmbeddingServiceSettings()
+    if settings.backend == "mock":
+        raise RuntimeError("production ingestion refuses mock embeddings")
+    required = ("MINILM_TOKENIZER_PATH",
                 "RUSTFS_ENDPOINT", "RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY",
                 "RUSTFS_BUCKET", "MILVUS_URI")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise RuntimeError("production ingestion missing: " + ", ".join(missing))
+    config = IngestionConfig.from_env()
+    embedding_settings = replace(
+        config.embeddings,
+        model_id=settings.model_id,
+        modality_config=settings.modality_config,
+        dimension=settings.dimension,
+        normalize=settings.normalize,
+    )
+    config = replace(config, embeddings=embedding_settings)
+    if settings.backend == "vllm":
+        backend = VllmEmbeddingBackend(
+            model_id=settings.model_id,
+            base_url=settings.vllm_url,
+            api_key=settings.vllm_api_key,
+            timeout_s=settings.vllm_timeout_s,
+            dimension=settings.dimension,
+            normalize=settings.normalize,
+            modality_config=settings.modality_config,
+        )
+    else:
+        backend = SentenceTransformersGemmaBackend(
+            settings=embedding_settings, model_path=settings.model_path or None,
+        )
     return PipelineDeps(
-        config=IngestionConfig.from_env(),
-        embedding_backend=SentenceTransformersGemmaBackend(),
+        config=config,
+        embedding_backend=backend,
         index_sink=MilvusIndexSink(
             os.environ["MILVUS_URI"],
             os.environ.get("MILVUS_ALIAS", "project_knowledge_base"),

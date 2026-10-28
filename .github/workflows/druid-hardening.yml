@@ -30,6 +30,7 @@ jobs:
           cp .env.example .env
           docker compose --env-file .env -f deploy/docker-compose.yml config --quiet
           docker compose --env-file .env -f deploy/docker-compose.gpu.yml config --quiet
+          docker compose --env-file .env -f deploy/docker-compose.embedding.yml config --quiet
   mcp-auth-contracts:
     runs-on: ubuntu-latest
     steps:

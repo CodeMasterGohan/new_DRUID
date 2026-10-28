@@ -1,4 +1,4 @@
-"""EmbeddingGemma 2 CPU serving logic (spec §8).
+"""EmbeddingGemma 2 API adapter and optional local serving logic (spec §8).
 
 The §8 prefix contract is owned by the ingestion sibling
 (``services/ingestion/embeddings.py``) and reused here via :mod:`reuse` —
@@ -13,12 +13,14 @@ import asyncio
 import base64
 import binascii
 from collections import OrderedDict
+from contextlib import nullcontext
 import logging
 import math
 import threading
 
 from . import reuse
 from .settings import EmbeddingServiceSettings
+from .vllm_backend import VllmEmbeddingBackend
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ _TASK_TO_SIBLING_TASK = {
 
 
 class EmbeddingService:
-    """CPU-only EmbeddingGemma 2 service (§8, §2 GPU arbitration)."""
+    """Preserve the prefix/API contract while sharing vLLM inference."""
 
     def __init__(
         self,
@@ -55,6 +57,16 @@ class EmbeddingService:
         if self.settings.backend == "mock":
             log.warning("embedding backend=mock: deterministic fake vectors, NOT semantic")
             return ing.MockEmbeddingBackend(dimension=self.settings.dimension)
+        if self.settings.backend == "vllm":
+            return VllmEmbeddingBackend(
+                model_id=self.settings.model_id,
+                base_url=self.settings.vllm_url,
+                api_key=self.settings.vllm_api_key,
+                timeout_s=self.settings.vllm_timeout_s,
+                dimension=self.settings.dimension,
+                normalize=self.settings.normalize,
+                modality_config=self.settings.modality_config,
+            )
         # Production: sentence-transformers, CPU, pre-staged artifact only.
         st_settings = ing.EmbeddingSettings(
             model_id=self.settings.model_id,
@@ -114,9 +126,10 @@ class EmbeddingService:
         self._verified = True
 
     def _encode_texts(self, formatted: list[str]) -> list[list[float]]:
-        # sentence-transformers encode is run under a lock: CPU inference is
-        # throughput-bound and the encoder is not guaranteed thread-safe.
-        with self._lock:
+        # Only the local encoder needs serialization. Let vLLM batch concurrent
+        # HTTP requests; the semaphore still bounds adapter concurrency.
+        guard = nullcontext() if self.settings.backend == "vllm" else self._lock
+        with guard:
             vectors = self._backend.embed_texts(formatted)
         for v in vectors:
             self._verify_vector(v)
@@ -201,8 +214,7 @@ class EmbeddingService:
         if not image:
             raise ValueError("image bytes must be non-empty")
         async with self._semaphore:
-            with self._lock:
-                vectors = self._backend.embed_images([image])
+            vectors = await asyncio.to_thread(self._encode_images, [image])
         self._verify_vector(vectors[0])
         return {
             "vector": vectors[0],
@@ -212,6 +224,11 @@ class EmbeddingService:
             "text": page_label,
         }
 
+    def _encode_images(self, images: list[bytes]) -> list[list[float]]:
+        guard = nullcontext() if self.settings.backend == "vllm" else self._lock
+        with guard:
+            return self._backend.embed_images(images)
+
     def describe(self) -> dict:
         """Model/card info for GET /health."""
         return {
@@ -220,9 +237,10 @@ class EmbeddingService:
             "dimension": self.settings.dimension,
             "normalize": self.settings.normalize,
             "backend": self.settings.backend,
-            "model_path": self.settings.model_path or None,
+            "model_path": (self.settings.model_path or None) if self.settings.backend == "st" else None,
+            "vllm_url": self.settings.vllm_url if self.settings.backend == "vllm" else None,
             "model_loaded": self._verified,
-            "device": "cpu",
+            "device": "remote" if self.settings.backend == "vllm" else "cpu",
         }
 
 

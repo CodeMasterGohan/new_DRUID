@@ -1,8 +1,9 @@
 # Deployment runbook — new_DRUID on a single H200 host
 
 Target: one machine with an NVIDIA H200 (141 GB HBM3e). All services except
-vLLM run on CPU/host RAM. vLLM (olmOCR-2-7B-FP8) is the ONLY GPU consumer
-(spec §2).
+vLLM run on CPU/host RAM. Separate vLLM engines serve OCR and EmbedGemma
+on the GPU. The EmbedGemma engine is shared with SAGE; see
+[`shared embedding deployment`](../deploy/shared-embedding.md).
 
 ## 0. Prerequisites
 
@@ -83,6 +84,10 @@ cp .env.example .env   # fill secrets
 # 0. Shared network for cross-project DNS (ingestion workers → vLLM).
 #    Both compose projects attach to it as external. Create once per host.
 docker network create druid-net
+docker network create embedding-net
+
+# Shared EmbedGemma server (start once for DRUID + SAGE, before app adapters).
+docker compose --env-file .env -f deploy/docker-compose.embedding.yml up -d --wait --wait-timeout 600
 
 # 1. Infrastructure
 docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis rustfs etcd milvus
@@ -128,8 +133,10 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec gateway curl -s
 # Milvus collection exists with the alias
 # (via milvus_setup logs or pymilvus: utility.has_collection("project_knowledge_base_v1"))
 
-# Embedding service loads the staged model read-only (no download)
-docker compose logs embedding | grep -i "offline\|model loaded"
+# Embedding adapter must report backend=vllm and a completed remote warmup.
+docker compose --env-file .env -f deploy/docker-compose.yml logs embedding
+# Run deploy/check_embedding.py on embedding-net, per deploy/shared-embedding.md,
+# to verify both text and page-image inference.
 
 # vLLM serves the FP8 checkpoint
 docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr curl -f http://localhost:8000/v1/models   # internal-only vLLM endpoint
@@ -140,8 +147,10 @@ docker compose --env-file .env -f deploy/docker-compose.gpu.yml exec vllm-olmocr
 With external network blocked (firewall or `docker network disconnect`), every
 service must start cleanly and serve. Expected behavior:
 
-- Embedding / retrieval / ingestion: start, log model load from `/models`.
-- vLLM: starts from the mounted checkpoint.
+- Embedding / ingestion: reach the shared vLLM server without external traffic.
+- Retrieval / ingestion: load the local MiniLM reranker/tokenizer from `/models`.
+- Both vLLM servers: start from their mounted checkpoints.
+- Missing shared inference causes startup/request failure, never a CPU fallback.
 - Any `MissingArtifact` / startup failure must name the artifact and the
   expected mount path — never attempt a download.
 
@@ -157,5 +166,7 @@ Before production traffic, run a throughput burn-in:
 ## 6. GPU arbitration check (§13)
 
 Measure olmOCR pages/hour **while** the embedding and query services are under
-load. If KV-cache pressure forces the 0.7 cap down, the lever is ingestion
-concurrency (worker count, quotas) — not a second GPU consumer.
+load. OCR defaults to a `0.70` memory fraction and the shared embedding
+engine to `0.15`. Measure peak use under concurrent requests, retain GPU
+headroom and adjust both limits plus ingestion concurrency as needed. The
+shared engine also receives SAGE traffic; include it in the burn-in.

@@ -1,9 +1,9 @@
 # vLLM serving config — olmOCR-2-7B-FP8 on the single H200
 
-Per spec §2 (GPU arbitration): **vLLM serving olmOCR is the ONLY GPU
-consumer.** Embedding (EmbeddingGemma 2) and the MiniLM reranker run on CPU.
-Any additional GPU consumer requires re-validation of this policy — never
-uncontended sharing.
+OCR and the shared EmbedGemma vLLM server are separate GPU engines.
+The MiniLM reranker remains on CPU. See [shared-embedding.md](shared-embedding.md)
+for the embedding server shared by DRUID and SAGE and its deployment lifecycle.
+Measure their concurrent peak usage before production rollout.
 
 ## Checkpoint
 
@@ -39,7 +39,8 @@ fail startup, never trigger a download.
 |---|---|
 | FP8 weights (7B params × 1 byte) | ~7 GB |
 | vLLM reservation (`0.7 × 141 GB`) | ~98.7 GB total for weights + KV cache + activations |
-| Remaining GPU headroom | ~42 GB (deliberately unallocated) |
+| Shared embedding reservation (`0.15 × 141 GB`) | ~21.2 GB |
+| Remaining GPU headroom | ~21 GB |
 
 olmOCR renders each page at longest-dimension 1288 px and generates
 markdown-ish output; per-request KV cache is the dominant variable cost.

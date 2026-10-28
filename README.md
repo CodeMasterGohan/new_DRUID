@@ -11,7 +11,7 @@
 
 | Pillar | Description |
 |---|---|
-| 📥 **Ingestion** | PDF/text/Office → page router (native pdftext vs. visual olmOCR 2) → canonical document tree → structural chunking → CPU embeddings |
+| 📥 **Ingestion** | PDF/text/Office → page router (native pdftext vs. visual olmOCR 2) → canonical document tree → structural chunking → shared vLLM embeddings |
 | 🧠 **Retrieval** | Hybrid dense (EmbeddingGemma 2, 768-dim) + server-side BM25 + identifier match → RRF fusion → MiniLM rerank, all tenant-scoped |
 | 🔌 **MCP server** | 8 FastMCP tools (Streamable HTTP + stdio) with JWT auth and role-gated mutations |
 | 🖥️ **Web UI** | Upload, Documents, Review queue, Quarantine, Search, and Admin views — dark mode, no CDN, vendored htmx |
@@ -41,12 +41,14 @@ browser / AI agent / CLI
         │                                              │
         ▼                                              ▼
    job queue (Redis/RQ) ──► ingestion workers ──► RustFS (S3)
-        pdftext ──► page router ──► olmOCR 2 FP8 on vLLM (ONLY GPU consumer)
+        pdftext ──► page router ──► olmOCR 2 FP8 on vLLM
+        ingestion + retrieval ──► shared EmbedGemma vLLM (also used by SAGE)
 ```
 
 Backend containers remain on private Compose networks rather than joining
 the external **`cora`** network. Web UI and MCP retain opt-in cross-project
-reachability; ingestion also joins **`druid-net`** for GPU OCR.
+reachability; ingestion also joins **`druid-net`** for GPU OCR. Embedding
+adapters and ingestion join **`embedding-net`** for the shared EmbedGemma vLLM service.
 Only two host ports are published: **8005** (web UI) and **8002** (MCP,
 loopback-bound by default). Everything else is container-to-container.
 
@@ -56,6 +58,11 @@ loopback-bound by default). Everything else is container-to-container.
 cp .env.example .env          # fill in secrets (never commit .env)
 docker network create cora    # only if not already present on your host
 docker network create druid-net # shared with the GPU OCR project
+docker network create embedding-net # shared with SAGE embeddings
+
+# Shared embeddings: start ONCE, from either DRUID or SAGE, before app services.
+# Stage google/embeddinggemma-2 (including chat_template.jinja) under MODEL_DIR.
+docker compose --env-file .env -f deploy/docker-compose.embedding.yml up -d --wait --wait-timeout 600
 
 # 1. Infrastructure
 docker compose --env-file .env -f deploy/docker-compose.yml up -d
@@ -76,8 +83,11 @@ not in Keycloak. A user can belong to multiple groups; the selected group
 scopes uploads, searches, review and deletion. Members may remove only their
 own uploaded documents; group managers may manage group documents.
 
-> **First boot:** stage model artifacts and initialize the `druid-net`
-> GPU network. Backend and MCP containers are private; externally exposed
+> **First boot:** stage model artifacts, initialize `druid-net` and
+> `embedding-net`, and start the shared embedding server. See
+> [`deploy/shared-embedding.md`](deploy/shared-embedding.md) for the shared
+> lifecycle, upgrading an existing `.env`, and text/image smoke tests.
+> Backend and MCP containers are private; externally exposed
 > browsers and AI clients use the HTTPS reverse proxy in front of the UI
 > and authenticated API gateway. `cora` is no longer required.
 > See `docs/runbook.md` and `DRUID_HARDENING.md` before any rollout.
@@ -165,7 +175,7 @@ services/
   web_ui/        FastAPI + Jinja2 + vendored htmx, dark-mode default
   catalog/       PostgreSQL models, Alembic, tenant-scoped repository
   ingestion/     pdftext router, olmOCR client, chunker, pipeline, RQ workers
-  embedding/     EmbeddingGemma 2 CPU service (task-aware prefixes)
+  embedding/     EmbeddingGemma 2 adapter to shared vLLM (task-aware prefixes)
   retrieval/     Hybrid search: dense + BM25 + identifiers → RRF → MiniLM
   milvus_setup/ One-shot collection/index/alias job (pymilvus)
   artifacts/     Manifest validate/verify CLI + example manifests

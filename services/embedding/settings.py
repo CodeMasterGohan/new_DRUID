@@ -1,7 +1,7 @@
 """Embedding service settings (spec §2, §8).
 
-CPU-only by design: the H200 belongs to vLLM/olmOCR (§2 GPU arbitration).
-This service must never request GPU resources.
+This CPU adapter forwards to a shared vLLM model server by default.
+Local sentence-transformers inference remains an explicit opt-in.
 """
 
 from __future__ import annotations
@@ -40,8 +40,11 @@ class EmbeddingServiceSettings(BaseSettings):
 
     normalize: bool = Field(default=True)
 
-    # "st" (sentence-transformers production backend) or "mock" (tests/dev).
-    backend: str = Field(default="st")
+    # Both applications use the same Docker vLLM pooling server.
+    backend: str = Field(default="vllm")
+    vllm_url: str = Field(default="http://vllm-embedding:8000/v1")
+    vllm_api_key: str = Field(default="", repr=False)
+    vllm_timeout_s: float = Field(default=120.0, gt=0, allow_inf_nan=False)
 
     # CPU serving knobs.
     batch_size: int = Field(default=32, ge=1, le=256)
@@ -72,6 +75,6 @@ class EmbeddingServiceSettings(BaseSettings):
     @field_validator("backend")
     @classmethod
     def _validate_backend(cls, v: str) -> str:
-        if v not in ("st", "mock"):
-            raise ValueError(f"unknown backend {v!r}: expected 'st' or 'mock'.")
+        if v not in ("vllm", "st", "mock"):
+            raise ValueError(f"unknown backend {v!r}: expected 'vllm', 'st' or 'mock'.")
         return v

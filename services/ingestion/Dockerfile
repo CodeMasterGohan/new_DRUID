@@ -11,9 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY services/ingestion/requirements.txt .
-# torch from the CPU index FIRST (mirrors the embedding service): the
-# default PyPI torch wheel bundles CUDA and must never land here (§2 GPU
-# arbitration — the H200 belongs to vLLM/olmOCR).
+# CPU torch supports PDF/OCR prompt tooling; inference itself uses vLLM.
+# Keep GPU wheels out of the workers.
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 torchvision==0.29.1 \
  && pip install --no-cache-dir -r requirements.txt
 # Full services tree (not a flat copy): the RQ worker must import the
@@ -25,6 +24,8 @@ COPY services/__init__.py /app/services/__init__.py
 COPY services/common/ /app/services/common/
 COPY services/catalog/ /app/services/catalog/
 COPY services/ingestion/ /app/services/ingestion/
+# Shared remote backend and settings, without importing the API service.
+COPY services/embedding/__init__.py services/embedding/settings.py services/embedding/vllm_backend.py /app/services/embedding/
 # Models mount read-only from the host artifact registry (see .env.example).
 # Shell form (NOT exec form): Docker does not expand ${...} in exec-form
 # CMD, so the exec form would hand rq the literal string "${REDIS_URL}".

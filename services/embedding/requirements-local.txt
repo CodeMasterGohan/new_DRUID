@@ -1,0 +1,8 @@
+# Optional local CPU backend; install only for EMBEDDING_BACKEND=st.
+# Install torch/torchvision from the CPU wheel index first (see Dockerfile).
+sentence-transformers==6.1.0
+torch==2.14.1
+torchvision==0.29.1
+transformers==5.20.2
+huggingface-hub==1.33.0
+pillow==13.0.0

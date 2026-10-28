@@ -1,14 +1,17 @@
-# embedding — EmbeddingGemma 2 service (sentence-transformers). CPU ONLY.
-# §2 GPU arbitration: the H200 belongs to vLLM/olmOCR. This image must never
-# request GPU resources. torch is installed from the CPU index.
+# Lightweight EmbeddingGemma 2 API adapter. Inference uses shared vLLM.
+# Local CPU sentence-transformers is an explicit build/runtime opt-in.
 FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \
     HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
     OMP_NUM_THREADS=8
 WORKDIR /app
-COPY services/embedding/requirements.txt .
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 torchvision==0.29.1 \
- && pip install --no-cache-dir -r requirements.txt
+COPY services/embedding/requirements*.txt ./
+ARG INSTALL_LOCAL_EMBEDDINGS=false
+RUN pip install --no-cache-dir -r requirements.txt \
+ && if [ "$INSTALL_LOCAL_EMBEDDINGS" = "true" ]; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.14.1 torchvision==0.29.1 \
+      && pip install --no-cache-dir -r requirements-local.txt; \
+    fi
 COPY services/__init__.py /app/services/__init__.py
 # §8 prefix contract lives in the ingestion sibling (single source of truth).
 # Copy ONLY the stdlib-only contract files — never services/ingestion/__init__.py
@@ -20,8 +23,7 @@ COPY services/ingestion/chunker.py /app/services/ingestion/chunker.py
 COPY services/ingestion/tree.py /app/services/ingestion/tree.py
 COPY services/ingestion/identifiers.py /app/services/ingestion/identifiers.py
 COPY services/embedding/ /app/services/embedding/
-# Model artifacts mount READ-ONLY at /models (host registry). Missing model
-# dir must fail startup loudly — never download at runtime.
+# Only the optional local backend needs a read-only artifact mount.
 RUN useradd --system --uid 10001 --create-home druid && chown -R druid:druid /app
 USER druid
 

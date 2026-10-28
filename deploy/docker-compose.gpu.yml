@@ -1,5 +1,7 @@
 # new_DRUID GPU plane — vLLM serving olmOCR-2-7B-FP8.
-# Runs ONLY on the H200 host. This is the single GPU consumer per spec §2.
+# Runs on the H200 host alongside the shared embedding vLLM service.
+# Default memory fractions are 0.70 for OCR and 0.15 for embeddings;
+# measure peak usage and retain headroom when colocating both engines.
 # See vllm-olmocr.md for the full config rationale.
 name: druid-gpu
 
